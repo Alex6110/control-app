@@ -1,8 +1,9 @@
 'use strict';
 
 /* =========================================================
-   Scadenziario – app.js
-   Nessuna dipendenza, nessun build. Dati in locale oppure su Supabase.
+   Scadenziario v2 – app.js
+   Nessun build. Dati in locale (prova) oppure su Supabase con spazio condiviso.
+   Richiede icons.js (funzione ic).
    ========================================================= */
 
 const CFG = window.APP_CONFIG || {};
@@ -10,10 +11,24 @@ const MODE = CFG.supabaseUrl && CFG.supabaseKey ? 'cloud' : 'local';
 
 /* ---------- dati di riferimento ---------- */
 const CATS = {
-  auto: { label: 'Auto', icon: '🚗' },
-  casa: { label: 'Casa', icon: '🏠' },
-  altro: { label: 'Altro', icon: '📌' },
+  casa: {
+    label: 'Casa', icon: 'house', add: 'Aggiungi una casa', title: 'Le tue case',
+    empty: 'Aggiungi la tua casa per tenere sotto controllo affitto, bollette e tasse.',
+    sugg: ['Casa in affitto', 'Casa di proprietà', 'Seconda casa'], ph: 'es. Casa in via Roma',
+  },
+  mezzi: {
+    label: 'Mezzi', icon: 'car', add: 'Aggiungi un mezzo', title: 'I tuoi mezzi',
+    empty: 'Aggiungi la tua auto o la tua moto per non dimenticare più bollo, assicurazione e revisione.',
+    sugg: ['Auto', 'Moto', 'Scooter', 'Bicicletta'], ph: 'es. Fiat Panda',
+  },
+  altro: {
+    label: 'Altro', icon: 'shapes', add: 'Aggiungi', title: 'Altro',
+    empty: 'Qui puoi tenere abbonamenti, visite mediche, animali e tutto il resto.',
+    sugg: ['Abbonamenti', 'Salute', 'Animali', 'Lavoro'], ph: 'es. Abbonamenti',
+  },
 };
+const CAT_ORDER = ['casa', 'mezzi', 'altro'];
+const SUBTYPES = { affitto: 'In affitto', proprieta: 'Di proprietà' };
 
 const REC = {
   none: { label: 'Una sola volta', m: 0 },
@@ -25,29 +40,35 @@ const REC = {
   biennial: { label: 'Ogni 2 anni', m: 24 },
 };
 
+// only: la voce compare solo per quel tipo di casa (affitto / proprieta)
 const KINDS = [
-  { id: 'assicurazione', label: 'Assicurazione', icon: '🛡️', rec: 'yearly', cats: ['auto', 'casa', 'altro'] },
-  { id: 'bollo', label: 'Bollo auto', icon: '🧾', rec: 'yearly', cats: ['auto'] },
-  { id: 'revisione', label: 'Revisione', icon: '🔧', rec: 'biennial', cats: ['auto'] },
-  { id: 'tagliando', label: 'Tagliando', icon: '🛠️', rec: 'yearly', cats: ['auto'] },
-  { id: 'gomme', label: 'Cambio gomme', icon: '🛞', rec: 'semiannual', cats: ['auto'] },
-  { id: 'affitto', label: 'Affitto', icon: '🔑', rec: 'monthly', cats: ['casa'] },
-  { id: 'condominio', label: 'Spese condominiali', icon: '🏢', rec: 'monthly', cats: ['casa'] },
-  { id: 'luce', label: 'Luce', icon: '💡', rec: 'bimonthly', cats: ['casa'] },
-  { id: 'gas', label: 'Gas', icon: '🔥', rec: 'bimonthly', cats: ['casa'] },
-  { id: 'acqua', label: 'Acqua', icon: '💧', rec: 'quarterly', cats: ['casa'] },
-  { id: 'internet', label: 'Internet', icon: '📶', rec: 'monthly', cats: ['casa', 'altro'] },
-  { id: 'rifiuti', label: 'Tassa rifiuti (TARI)', icon: '🗑️', rec: 'yearly', cats: ['casa'] },
-  { id: 'imu', label: 'IMU', icon: '🏛️', rec: 'semiannual', cats: ['casa'] },
-  { id: 'caldaia', label: 'Manutenzione caldaia', icon: '♨️', rec: 'yearly', cats: ['casa'] },
-  { id: 'registro', label: 'Registrazione contratto', icon: '📑', rec: 'yearly', cats: ['casa'] },
-  { id: 'telefono', label: 'Telefono', icon: '📱', rec: 'monthly', cats: ['casa', 'altro'] },
-  { id: 'abbonamento', label: 'Abbonamento', icon: '🔁', rec: 'monthly', cats: ['altro'] },
-  { id: 'salute', label: 'Visita / controllo', icon: '🩺', rec: 'yearly', cats: ['altro'] },
-  { id: 'altro', label: 'Altro', icon: '📌', rec: 'none', cats: ['auto', 'casa', 'altro'] },
+  { id: 'assicurazione', label: 'Assicurazione', icon: 'shield', rec: 'yearly', cats: ['mezzi', 'casa', 'altro'] },
+  { id: 'bollo', label: 'Bollo', icon: 'receipt', rec: 'yearly', cats: ['mezzi'] },
+  { id: 'revisione', label: 'Revisione', icon: 'clipcheck', rec: 'biennial', cats: ['mezzi'] },
+  { id: 'tagliando', label: 'Tagliando', icon: 'gauge', rec: 'yearly', cats: ['mezzi'] },
+  { id: 'gomme', label: 'Gomme', icon: 'tyre', rec: 'semiannual', cats: ['mezzi'] },
+  { id: 'affitto', label: 'Affitto', icon: 'key', rec: 'monthly', cats: ['casa'], only: 'affitto' },
+  { id: 'condominio', label: 'Condominio', icon: 'building', rec: 'monthly', cats: ['casa'] },
+  { id: 'luce', label: 'Luce', icon: 'zap', rec: 'bimonthly', cats: ['casa'] },
+  { id: 'gas', label: 'Gas', icon: 'flame', rec: 'bimonthly', cats: ['casa'] },
+  { id: 'acqua', label: 'Acqua', icon: 'droplet', rec: 'quarterly', cats: ['casa'] },
+  { id: 'internet', label: 'Internet', icon: 'wifi', rec: 'monthly', cats: ['casa', 'altro'] },
+  { id: 'rifiuti', label: 'Rifiuti (TARI)', icon: 'bin', rec: 'yearly', cats: ['casa'] },
+  { id: 'imu', label: 'IMU', icon: 'landmark', rec: 'semiannual', cats: ['casa'], only: 'proprieta' },
+  { id: 'caldaia', label: 'Caldaia', icon: 'thermo', rec: 'yearly', cats: ['casa'] },
+  { id: 'registro', label: 'Registro contratto', icon: 'file', rec: 'yearly', cats: ['casa'], only: 'affitto' },
+  { id: 'telefono', label: 'Telefono', icon: 'phone', rec: 'monthly', cats: ['casa', 'altro'] },
+  { id: 'abbonamento', label: 'Abbonamento', icon: 'repeat', rec: 'monthly', cats: ['altro'] },
+  { id: 'salute', label: 'Visita medica', icon: 'heart', rec: 'yearly', cats: ['altro'] },
+  { id: 'animali', label: 'Veterinario', icon: 'paw', rec: 'yearly', cats: ['altro'] },
+  { id: 'documento', label: 'Documento (carta d\'identità, patente…)', icon: 'file', rec: 'none', cats: ['altro'] },
+  { id: 'altro', label: 'Altro', icon: 'tag', rec: 'none', cats: ['mezzi', 'casa', 'altro'] },
 ];
 const kindOf = (id) => KINDS.find((k) => k.id === id) || KINDS[KINDS.length - 1];
-const kindsFor = (cat, keep) => KINDS.filter((k) => k.cats.includes(cat) || k.id === keep);
+function kindsFor(item, keep) {
+  const cat = item?.category || 'altro';
+  return KINDS.filter((k) => k.id === keep || (k.cats.includes(cat) && (!k.only || !item?.subtype || k.only === item.subtype)));
+}
 
 /* ---------- utilità ---------- */
 const $ = (s, r = document) => r.querySelector(s);
@@ -69,7 +90,6 @@ const fmtDate = (iso) => { const d = fromISO(iso); return `${d.getDate()} ${MONT
 const fmtShort = (iso) => { const d = fromISO(iso); return `${d.getDate()} ${MONTHS_SHORT[d.getMonth()]}`; };
 const _eur2 = new Intl.NumberFormat('it-IT', { style: 'currency', currency: 'EUR', minimumFractionDigits: 2, maximumFractionDigits: 2, useGrouping: 'always' });
 const _eur0 = new Intl.NumberFormat('it-IT', { style: 'currency', currency: 'EUR', minimumFractionDigits: 0, maximumFractionDigits: 0, useGrouping: 'always' });
-// interi senza decimali (650 €), altrimenti sempre due decimali (29,90 €)
 const eurFmt = { format: (n) => (Math.abs(n - Math.round(n)) < 0.005 ? _eur0.format(n) : _eur2.format(n)) };
 const eur0 = _eur0;
 const money = (n) => (n == null || n === '' || isNaN(n) ? '' : eurFmt.format(Number(n)));
@@ -84,11 +104,13 @@ function relative(iso) {
   return m < 12 ? `tra ${m} mesi` : (m < 18 ? 'tra circa un anno' : `tra ${(m / 12).toFixed(1).replace('.', ',').replace(',0', '')} anni`);
 }
 const urgency = (iso) => { const d = diffDays(todayISO(), iso); return d < 0 ? 'late' : d <= 7 ? 'soon' : ''; };
+const tile = (icon, cat) => `<div class="tile tint-${cat || 'altro'}">${ic(icon)}</div>`;
 
 /* ---------- stato ---------- */
 const state = {
-  tab: 'scadenze', filter: 'all', items: [], deadlines: [],
-  user: null, ready: false, offline: !navigator.onLine, loadError: '',
+  tab: 'home', itemId: null, items: [], deadlines: [],
+  user: null, hid: null, household: null, members: 1,
+  ready: false, offline: !navigator.onLine, loadError: '', authMode: 'login', anim: '',
 };
 let sb = null;
 
@@ -118,6 +140,7 @@ const localStore = {
   },
 };
 
+const numAmount = (r) => (r && r.amount != null ? { ...r, amount: Number(r.amount) } : r);
 const cloudStore = {
   async load() {
     const [a, b] = await Promise.all([
@@ -126,19 +149,17 @@ const cloudStore = {
     ]);
     if (a.error) throw a.error;
     if (b.error) throw b.error;
-    const data = { items: a.data, deadlines: b.data.map((x) => ({ ...x, amount: x.amount == null ? null : Number(x.amount) })) };
-    try { localStorage.setItem(LS + '.snap.' + state.user.id, JSON.stringify(data)); } catch {}
-    return data;
+    return { items: a.data, deadlines: b.data.map(numAmount) };
   },
   async insert(t, row) {
-    const { data, error } = await sb.from(t).insert(row).select().single();
+    const { data, error } = await sb.from(t).insert({ household_id: state.hid, ...row }).select().single();
     if (error) throw error;
-    return t === 'deadlines' && data.amount != null ? { ...data, amount: Number(data.amount) } : data;
+    return t === 'deadlines' ? numAmount(data) : data;
   },
   async update(t, id, patch) {
     const { data, error } = await sb.from(t).update(patch).eq('id', id).select().single();
     if (error) throw error;
-    return t === 'deadlines' && data.amount != null ? { ...data, amount: Number(data.amount) } : data;
+    return t === 'deadlines' ? numAmount(data) : data;
   },
   async remove(t, id) {
     const { error } = await sb.from(t).delete().eq('id', id);
@@ -155,28 +176,30 @@ function canWrite() {
 /* ---------- operazioni sui dati ---------- */
 const byId = (arr, id) => arr.find((x) => x.id === id);
 const sortDeadlines = () => state.deadlines.sort((a, b) => a.due_date.localeCompare(b.due_date));
+const normItem = (i) => (i.category === 'auto' ? { ...i, category: 'mezzi' } : i);
 
 async function saveItem(id, fields) {
   if (!canWrite()) return null;
   try {
     if (id) {
-      const r = await store.update('items', id, fields);
+      const r = normItem(await store.update('items', id, fields));
       state.items = state.items.map((x) => (x.id === id ? r : x));
       return r;
     }
-    const r = await store.insert('items', fields);
+    const r = normItem(await store.insert('items', fields));
     state.items.push(r);
     return r;
   } catch (e) { fail(e); return null; }
 }
 
 async function deleteItem(id) {
-  if (!canWrite()) return;
+  if (!canWrite()) return false;
   try {
     await store.remove('items', id);
     state.items = state.items.filter((x) => x.id !== id);
     state.deadlines = state.deadlines.filter((x) => x.item_id !== id);
-  } catch (e) { fail(e); }
+    return true;
+  } catch (e) { fail(e); return false; }
 }
 
 async function saveDeadline(id, fields) {
@@ -194,11 +217,12 @@ async function saveDeadline(id, fields) {
 }
 
 async function deleteDeadline(id) {
-  if (!canWrite()) return;
+  if (!canWrite()) return false;
   try {
     await store.remove('deadlines', id);
     state.deadlines = state.deadlines.filter((x) => x.id !== id);
-  } catch (e) { fail(e); }
+    return true;
+  } catch (e) { fail(e); return false; }
 }
 
 // Segna come pagata. Se la scadenza si ripete, crea subito la successiva.
@@ -222,7 +246,7 @@ async function markPaid(id) {
     sortDeadlines();
   } catch (e) { fail(e); render(); return; }
   render();
-  toast(nextId ? 'Pagata ✓ — ho già messo la prossima in calendario' : 'Pagata ✓', {
+  toast(nextId ? 'Pagata. Ho già messo la prossima in calendario' : 'Pagata', {
     label: 'Annulla',
     fn: async () => { await reopen(id, nextId); },
   });
@@ -249,10 +273,10 @@ function fail(e) {
 
 /* ---------- calcoli sui costi ---------- */
 // Espande le scadenze aperte in singole occorrenze tra "from" e "to" (ISO, inclusi).
-function occurrences(from, to) {
+function occurrences(from, to, filter) {
   const out = [];
   for (const dl of state.deadlines) {
-    if (dl.paid) continue;
+    if (dl.paid || (filter && !filter(dl))) continue;
     const step = REC[dl.recurrence]?.m || 0;
     let d = dl.due_date;
     if (d < from) {              // scaduta e non pagata: la conto una volta, adesso
@@ -282,9 +306,9 @@ function costWindow() {
   return { from, to: toISO(lastMonth), months };
 }
 
-function costSummary() {
+function costSummary(filter) {
   const w = costWindow();
-  const occ = occurrences(w.from, w.to).filter((o) => o.dl.amount != null);
+  const occ = occurrences(w.from, w.to, filter).filter((o) => o.dl.amount != null);
   const byItem = {}, byCat = {}, byKind = {};
   let total = 0;
   for (const { dl, date } of occ) {
@@ -298,36 +322,51 @@ function costSummary() {
     byCat[cat] = (byCat[cat] || 0) + amt;
     byKind[dl.kind] = (byKind[dl.kind] || 0) + amt;
   }
-  const missing = state.deadlines.filter((d) => !d.paid && d.amount == null).length;
+  const missing = state.deadlines.filter((d) => !d.paid && d.amount == null && (!filter || filter(d))).length;
   return { total, months: w.months, byItem, byCat, byKind, missing };
 }
+const inCat = (cat) => (dl) => byId(state.items, dl.item_id)?.category === cat;
+const ofItem = (id) => (dl) => dl.item_id === id;
 
 /* ---------- render ---------- */
 const app = $('#app');
+const NAV = [['home', 'today', 'Home'], ['casa', 'house', 'Casa'], ['mezzi', 'car', 'Mezzi'], ['altro', 'shapes', 'Altro']];
 
 function render() {
   if (!state.ready) { app.innerHTML = ''; return; }
-  if (MODE === 'cloud' && !state.user) { renderLogin(); updateBadge(); return; }
+  if (MODE === 'cloud') {
+    if (!state.user) { renderLogin(); updateBadge(); return; }
+    if (!state.hid) { renderOnboarding(); return; }
+  }
+  const item = state.itemId ? byId(state.items, state.itemId) : null;
+  if (state.itemId && !item) state.itemId = null;
 
-  const titles = { scadenze: 'Scadenze', costi: 'Costi', elementi: 'Auto e casa' };
-  const views = { scadenze: viewDeadlines, costi: viewCosts, elementi: viewItems };
+  let page;
+  if (item) page = pageItem(item);
+  else if (state.tab === 'home') page = pageHome();
+  else page = pageSection(state.tab);
+
   const banner = state.offline && MODE === 'cloud'
-    ? '<div class="banner">Sei offline: vedi l\'ultima copia dei dati. Le modifiche tornano disponibili appena c\'è connessione.</div>'
-    : (state.loadError ? `<div class="banner">${esc(state.loadError)}</div>` : '');
+    ? `<div class="banner">${ic('alert')}<span>Sei offline: vedi l'ultima copia dei dati. Potrai modificare appena torna la connessione.</span></div>`
+    : (state.loadError ? `<div class="banner">${ic('alert')}<span>${esc(state.loadError)}</span></div>` : '');
+
+  const left = item ? `<button class="icon-btn" data-action="back" aria-label="Indietro">${ic('back')}</button>` : '';
+  const right = item
+    ? `<button class="icon-btn" data-action="item-menu" data-id="${item.id}" aria-label="Opzioni">${ic('dots')}</button>`
+    : `<button class="icon-btn" data-action="settings" aria-label="Impostazioni">${ic('sliders')}</button>`;
 
   app.innerHTML = `
-    <header class="topbar"><div class="wrap">
-      <h1>${titles[state.tab]}</h1>
-      <button class="icon-btn" data-action="settings" aria-label="Impostazioni">⚙️</button>
+    <header class="topbar"><div class="wrap bar ${item ? 'has-back' : ''}">
+      ${left}<h1>${esc(page.title)}</h1>${right}
     </div></header>
-    <main class="wrap">${banner}${views[state.tab]()}</main>
-    ${state.tab !== 'elementi' && state.items.length ? '<button class="fab" data-action="new-deadline"><span class="plus">+</span> Scadenza</button>' : ''}
+    <main class="wrap ${state.anim === 'push' ? 'page-in' : state.anim === 'pop' ? 'page-back' : ''}">${banner}${page.body}</main>
+    ${page.fab ? `<button class="fab" data-action="new-deadline" ${page.fabItem ? `data-item="${page.fabItem}"` : ''}>${ic('plus')}<span>Scadenza</span></button>` : ''}
     <nav class="nav"><div class="inner">
-      ${navBtn('scadenze', '📅', 'Scadenze')}${navBtn('costi', '💶', 'Costi')}${navBtn('elementi', '🚗', 'Auto e casa')}
+      ${NAV.map(([id, icon, label]) => `<button data-action="tab" data-tab="${id}" class="${state.tab === id ? 'active' : ''}" aria-label="${label}">${ic(icon)}<span>${label}</span></button>`).join('')}
     </div></nav>`;
+  state.anim = '';
   updateBadge();
 }
-const navBtn = (id, ico, label) => `<button data-action="tab" data-tab="${id}" class="${state.tab === id ? 'active' : ''}" aria-label="${label}"><span class="ico">${ico}</span>${label}</button>`;
 
 function updateBadge() {
   if (!('setAppBadge' in navigator)) return;
@@ -336,7 +375,7 @@ function updateBadge() {
   (n ? navigator.setAppBadge(n) : navigator.clearAppBadge()).catch(() => {});
 }
 
-/* --- vista: scadenze --- */
+/* --- componenti --- */
 function rowDeadline(dl, opts = {}) {
   const k = kindOf(dl.kind);
   const it = byId(state.items, dl.item_id);
@@ -346,236 +385,319 @@ function rowDeadline(dl, opts = {}) {
     : `${opts.hideItem ? '' : esc(it?.name || '') + ' · '}${relative(dl.due_date)}`;
   return `
     <div class="row ${dl.paid ? 'done' : ''}" data-action="edit-deadline" data-id="${dl.id}" role="button" tabindex="0">
-      <div class="ico">${k.icon}</div>
+      ${tile(k.icon, it?.category)}
       <div class="main"><div class="t">${esc(dl.title)}</div><div class="s ${u}">${sub}</div></div>
       <div class="right"><div class="amt">${money(dl.amount)}</div><div class="dt">${fmtShort(dl.due_date)}</div></div>
-      ${dl.paid ? '' : `<button class="check" data-action="pay" data-id="${dl.id}" aria-label="Segna come pagata" title="Segna come pagata">✓</button>`}
+      ${dl.paid ? '' : `<button class="check" data-action="pay" data-id="${dl.id}" aria-label="Segna come pagata">${ic('check')}</button>`}
     </div>`;
 }
 
-function viewDeadlines() {
-  if (!state.items.length) return emptyStart();
-  const today = todayISO();
-  const cats = [...new Set(state.items.map((i) => i.category))];
-  const inFilter = (dl) => state.filter === 'all' || byId(state.items, dl.item_id)?.category === state.filter;
-  const open = state.deadlines.filter((d) => !d.paid && inFilter(d));
+function barsCard(months, title = 'Mese per mese') {
+  const maxM = Math.max(...months.map((m) => m.total), 1);
+  const bars = months.map((m, i) => `
+    <div class="col ${i === 0 ? 'now' : ''} ${m.total === 0 ? 'zero' : ''}" title="${m.label}: ${eurFmt.format(m.total)}">
+      <div class="v">${m.total ? (m.total >= 1000 ? (m.total / 1000).toFixed(1).replace('.', ',') + 'k' : Math.round(m.total)) : ''}</div>
+      <div class="bar" style="height:${Math.max(3, (m.total / maxM) * 100)}px"></div>
+      <div class="m">${m.label}</div>
+    </div>`).join('');
+  return `<div class="card"><h2>${title}</h2><div class="bars">${bars}</div>
+    <div class="legend-note">Euro. Le scadenze non pagate contano nel mese corrente.</div></div>`;
+}
 
-  const late = open.filter((d) => d.due_date < today);
-  const week = open.filter((d) => d.due_date >= today && diffDays(today, d.due_date) <= 7);
-  const month = open.filter((d) => diffDays(today, d.due_date) > 7 && diffDays(today, d.due_date) <= 30);
-  const later = open.filter((d) => diffDays(today, d.due_date) > 30);
+function breakdown(map, labeler) {
+  const entries = Object.entries(map).sort((a, b) => b[1] - a[1]);
+  const max = entries[0]?.[1] || 1;
+  return `<div class="brk">${entries.map(([key, val]) => {
+    const l = labeler(key);
+    return `<div class="line"><div class="top"><span class="lbl">${ic(l.icon)}${esc(l.name)}</span><b>${eur0.format(val)}</b></div>
+      <div class="track"><div class="fill" style="width:${Math.max(3, (val / max) * 100)}%"></div></div></div>`;
+  }).join('')}</div>`;
+}
 
-  const next30 = open.filter((d) => diffDays(today, d.due_date) <= 30);
-  const sum30 = next30.reduce((s, d) => s + (Number(d.amount) || 0), 0);
-
-  const chips = cats.length > 1
-    ? `<div class="chips">
-        <button class="chip ${state.filter === 'all' ? 'active' : ''}" data-action="filter" data-f="all">Tutto</button>
-        ${cats.map((c) => `<button class="chip ${state.filter === c ? 'active' : ''}" data-action="filter" data-f="${c}">${CATS[c].icon} ${CATS[c].label}</button>`).join('')}
-      </div>` : '';
-
-  const group = (title, arr, cls = '') => arr.length
-    ? `<div class="group-title ${cls}">${title}</div><div class="list">${arr.map((d) => rowDeadline(d)).join('')}</div>` : '';
-
-  const hero = `
-    <section class="hero">
-      <div class="label">Da pagare nei prossimi 30 giorni</div>
-      <div class="big">${eurFmt.format(sum30)}</div>
-      <div class="sub">${next30.length === 0 ? 'Nessuna scadenza in arrivo 🎉' : next30.length === 1 ? '1 scadenza' : next30.length + ' scadenze'}</div>
-      ${late.length ? `<div class="alert">⚠️ ${late.length} ${late.length === 1 ? 'scaduta' : 'scadute'}</div>` : ''}
-    </section>`;
-
-  const body = open.length
-    ? group('Scadute', late, 'late') + group('Questa settimana', week) + group('Entro 30 giorni', month) + group('Più avanti', later)
-    : '<div class="empty"><div class="big-ico">✅</div><h3>Tutto in ordine</h3><p>Non c\'è nessuna scadenza aperta. Aggiungine una con il pulsante in basso.</p></div>';
-
-  return hero + chips + body;
+function heroCosts(label, total) {
+  return `<section class="hero"><div class="label">${label}</div><div class="big">${eur0.format(total)}</div>
+    <div class="sub">circa ${eur0.format(total / 12)} al mese da mettere da parte</div></section>`;
 }
 
 function emptyStart() {
   return `
     <div class="empty">
-      <div class="big-ico">👋</div>
+      <div class="big-ico">${ic('ring')}</div>
       <h3>Cominciamo da qui</h3>
-      <p>Crea l'auto o la casa di cui vuoi tenere sotto controllo scadenze e spese.</p>
+      <p>Scegli che cosa vuoi tenere sotto controllo. Potrai aggiungere il resto quando vuoi.</p>
       <div class="quick">
-        <button class="btn" data-action="new-item" data-cat="auto">🚗 Aggiungi un'auto</button>
-        <button class="btn secondary" data-action="new-item" data-cat="casa">🏠 Aggiungi una casa</button>
-        <button class="btn secondary" data-action="new-item" data-cat="altro">📌 Altro</button>
+        ${CAT_ORDER.map((c, i) => `<button class="btn ${i ? 'secondary' : ''}" data-action="new-item" data-cat="${c}">${ic(CATS[c].icon)}${CATS[c].label === 'Altro' ? 'Altro' : CATS[c].add}</button>`).join('')}
       </div>
     </div>`;
 }
 
-/* --- vista: costi --- */
-function breakdown(map, labeler, onClickAction) {
-  const entries = Object.entries(map).sort((a, b) => b[1] - a[1]);
-  const max = entries[0]?.[1] || 1;
-  return `<div class="brk">${entries.map(([key, val]) => {
-    const l = labeler(key);
-    const head = `<span>${l.icon} ${esc(l.name)}</span><b>${eur0.format(val)}</b>`;
-    return `<div class="line">
-      ${onClickAction ? `<button class="top" data-action="${onClickAction}" data-id="${esc(key)}">${head}</button>` : `<div class="top">${head}</div>`}
-      <div class="track"><div class="fill" style="width:${Math.max(3, (val / max) * 100)}%"></div></div>
-    </div>`;
-  }).join('')}</div>`;
-}
+/* --- pagina: Home --- */
+function pageHome() {
+  if (!state.items.length) return { title: 'Scadenze', body: emptyStart(), fab: false };
+  const today = todayISO();
+  const open = state.deadlines.filter((d) => !d.paid);
+  const late = open.filter((d) => d.due_date < today);
+  const week = open.filter((d) => d.due_date >= today && diffDays(today, d.due_date) <= 7);
+  const month = open.filter((d) => diffDays(today, d.due_date) > 7 && diffDays(today, d.due_date) <= 30);
+  const later = open.filter((d) => diffDays(today, d.due_date) > 30);
+  const next30 = open.filter((d) => diffDays(today, d.due_date) <= 30);
+  const sum30 = next30.reduce((s, d) => s + (Number(d.amount) || 0), 0);
 
-function viewCosts() {
-  if (!state.items.length) return emptyStart();
-  const c = costSummary();
-  if (c.total === 0) {
-    return `<div class="empty"><div class="big-ico">💶</div><h3>Ancora nessun costo</h3>
-      <p>Inserisci l'importo nelle scadenze e qui vedrai quanto spendi ogni mese e ogni anno.</p></div>`;
-  }
-  const maxM = Math.max(...c.months.map((m) => m.total), 1);
-  const bars = c.months.map((m, i) => `
-    <div class="col ${i === 0 ? 'now' : ''} ${m.total === 0 ? 'zero' : ''}" title="${m.label}: ${eurFmt.format(m.total)}">
-      <div class="v">${m.total ? (m.total >= 1000 ? (m.total / 1000).toFixed(1).replace('.', ',') + 'k' : Math.round(m.total)) : ''}</div>
-      <div class="bar" style="height:${Math.max(2, (m.total / maxM) * 100)}px"></div>
-      <div class="m">${m.label}</div>
-    </div>`).join('');
-
-  return `
+  const hero = `
     <section class="hero">
-      <div class="label">Spesa prevista nei prossimi 12 mesi</div>
-      <div class="big">${eur0.format(c.total)}</div>
-      <div class="sub">circa ${eur0.format(c.total / 12)} al mese da mettere da parte</div>
-    </section>
-    <div class="card"><h2>Mese per mese</h2><div class="bars">${bars}</div>
-      <div class="legend-note">Importi in euro. Le scadenze non pagate vengono contate nel mese corrente.</div></div>
-    <div class="card"><h2>Per categoria</h2>${breakdown(c.byCat, (k) => ({ icon: CATS[k]?.icon || '📌', name: CATS[k]?.label || k }))}</div>
-    <div class="card"><h2>Per auto / casa</h2>${breakdown(c.byItem, (k) => { const it = byId(state.items, k); return { icon: CATS[it?.category]?.icon || '📌', name: it?.name || '—' }; }, 'open-item')}</div>
-    <div class="card"><h2>Per tipo di spesa</h2>${breakdown(c.byKind, (k) => { const kd = kindOf(k); return { icon: kd.icon, name: kd.label }; })}</div>
-    ${c.missing ? `<p class="hint">ℹ️ ${c.missing} ${c.missing === 1 ? 'scadenza non ha' : 'scadenze non hanno'} un importo e ${c.missing === 1 ? 'non è inclusa' : 'non sono incluse'} nei conteggi.</p>` : ''}`;
+      <div class="label">Da pagare nei prossimi 30 giorni</div>
+      <div class="big">${eurFmt.format(sum30)}</div>
+      <div class="sub">${next30.length === 0 ? 'Nessuna scadenza in arrivo' : next30.length === 1 ? '1 scadenza' : next30.length + ' scadenze'}</div>
+      ${late.length ? `<div class="alert">${ic('alert')}${late.length} ${late.length === 1 ? 'scaduta' : 'scadute'}</div>` : ''}
+    </section>`;
+
+  const cs = costSummary();
+  const cats = CAT_ORDER.filter((c) => state.items.some((i) => i.category === c));
+  const mini = `
+    <div class="minis">${cats.map((c) => `
+      <button class="mini" data-action="tab" data-tab="${c}">
+        ${tile(CATS[c].icon, c)}
+        <div class="ml">${CATS[c].label}</div>
+        <div class="mv">${cs.byCat[c] ? eur0.format(cs.byCat[c]) : '—'}</div>
+        <div class="ms">in 12 mesi</div>
+      </button>`).join('')}</div>`;
+
+  const group = (title, arr, cls = '') => arr.length
+    ? `<div class="group-title ${cls}">${title}</div><div class="list">${arr.map((d) => rowDeadline(d)).join('')}</div>` : '';
+  const body = open.length
+    ? group('Scadute', late, 'late') + group('Questa settimana', week) + group('Entro 30 giorni', month) + group('Più avanti', later)
+    : `<div class="empty"><div class="big-ico ok">${ic('checkCircle')}</div><h3>Tutto in ordine</h3><p>Non c'è nessuna scadenza aperta. Aggiungine una con il pulsante in basso.</p></div>`;
+
+  return { title: 'Scadenze', body: hero + mini + body, fab: true };
 }
 
-/* --- vista: elementi --- */
-function viewItems() {
-  if (!state.items.length) return emptyStart();
-  const w = costWindow();
-  const occ = occurrences(w.from, w.to);
-  const cards = state.items.map((it) => {
+/* --- pagina: sezione (Casa / Mezzi / Altro) --- */
+function pageSection(cat) {
+  const c = CATS[cat];
+  const items = state.items.filter((i) => i.category === cat);
+  if (!items.length) {
+    return {
+      title: c.label,
+      body: `<div class="empty"><div class="big-ico">${ic(c.icon)}</div><h3>${cat === 'altro' ? 'Niente qui, per ora' : 'Ancora nulla'}</h3><p>${c.empty}</p>
+        <div class="quick"><button class="btn" data-action="new-item" data-cat="${cat}">${ic('plus')}${c.add}</button></div></div>`,
+    };
+  }
+  const sum = costSummary(inCat(cat));
+  const cards = items.map((it) => {
     const own = state.deadlines.filter((d) => d.item_id === it.id && !d.paid);
     const next = own[0];
-    const yearly = occ.filter((o) => o.dl.item_id === it.id && o.dl.amount != null).reduce((s, o) => s + Number(o.dl.amount), 0);
+    const yearly = sum.byItem[it.id] || 0;
     const u = next ? urgency(next.due_date) : '';
+    const meta = it.subtype ? SUBTYPES[it.subtype] + ' · ' : '';
     return `
       <button class="row" data-action="open-item" data-id="${it.id}">
-        <div class="ico">${CATS[it.category]?.icon || '📌'}</div>
+        ${tile(c.icon, cat)}
         <div class="main"><div class="t">${esc(it.name)}</div>
-          <div class="s ${u}">${next ? `Prossima: ${esc(next.title)} · ${relative(next.due_date)}` : 'Nessuna scadenza'}</div></div>
+          <div class="s ${u}">${meta}${next ? `${esc(next.title)} ${relative(next.due_date)}` : 'Nessuna scadenza'}</div></div>
         <div class="right"><div class="amt">${yearly ? eur0.format(yearly) : ''}</div><div class="dt">${yearly ? 'in 12 mesi' : ''}</div></div>
+        <span class="chev">${ic('next')}</span>
       </button>`;
   }).join('');
-  return `<div class="list" style="margin-top:8px">${cards}</div>
-    <div class="actions"><button class="btn secondary" data-action="new-item">+ Aggiungi auto o casa</button></div>`;
+  const body = (sum.total ? heroCosts(`Spesa prevista, ${c.label.toLowerCase()}, 12 mesi`, sum.total) : '')
+    + `<div class="group-title">${c.title}</div><div class="list">${cards}</div>
+       <div class="actions"><button class="btn secondary" data-action="new-item" data-cat="${cat}">${ic('plus')}${c.add}</button></div>`
+    + (sum.total ? barsCard(sum.months) : '');
+  return { title: c.label, body };
 }
 
-/* ---------- accesso (solo modalità cloud) ---------- */
-function renderLogin() {
-  app.innerHTML = `
-    <div class="login">
-      <img class="logo" src="icons/icon-192.png" alt="">
-      <h1>Scadenziario</h1>
-      <p class="lead">Accedi per vedere le tue scadenze</p>
-      <form id="login-form">
-        <label>Email<input type="email" name="email" autocomplete="email" required></label>
-        <label>Password<input type="password" name="password" autocomplete="current-password" required></label>
-        <p class="err" id="login-err"></p>
-        <button class="btn" type="submit">Accedi</button>
-      </form>
-    </div>`;
+/* --- pagina: dettaglio elemento --- */
+function pageItem(it) {
+  const sum = costSummary(ofItem(it.id));
+  const open = state.deadlines.filter((d) => d.item_id === it.id && !d.paid);
+  const paid = state.deadlines.filter((d) => d.item_id === it.id && d.paid)
+    .sort((a, b) => (b.paid_on || '').localeCompare(a.paid_on || '')).slice(0, 8);
+  const kinds = Object.keys(sum.byKind).length > 1;
+  const body = `
+    ${it.subtype || it.note ? `<p class="hint item-sub">${it.subtype ? SUBTYPES[it.subtype] : ''}${it.subtype && it.note ? ' · ' : ''}${esc(it.note || '')}</p>` : ''}
+    ${sum.total ? heroCosts('Spesa prevista nei prossimi 12 mesi', sum.total) : ''}
+    <div class="group-title">Da pagare</div>
+    ${open.length ? `<div class="list">${open.map((d) => rowDeadline(d, { hideItem: true })).join('')}</div>`
+      : `<div class="card soft"><p class="hint" style="margin:0 0 12px">Nessuna scadenza. Premi “Scadenza” per aggiungere la prima${GUIDE[it.category === 'casa' ? 'casa_' + (it.subtype || 'affitto') : it.category] ? ', oppure compila le voci principali in un colpo solo.' : '.'}</p>
+        ${GUIDE[it.category === 'casa' ? 'casa_' + (it.subtype || 'affitto') : it.category] ? `<button class="btn secondary small" data-action="guided" data-id="${it.id}">Compila le voci principali</button>` : ''}</div>`}
+    ${sum.total ? barsCard(sum.months) : ''}
+    ${kinds ? `<div class="card"><h2>Dove vanno i soldi</h2>${breakdown(sum.byKind, (k) => { const kd = kindOf(k); return { icon: kd.icon, name: kd.label }; })}</div>` : ''}
+    ${paid.length ? `<div class="group-title">Pagate di recente</div><div class="list">${paid.map((d) => rowDeadline(d, { hideItem: true })).join('')}</div>` : ''}
+    ${sum.missing ? `<p class="hint">${sum.missing} ${sum.missing === 1 ? 'scadenza non ha' : 'scadenze non hanno'} un importo e non ${sum.missing === 1 ? 'è inclusa' : 'sono incluse'} nei conteggi.</p>` : ''}`;
+  return { title: it.name, body, fab: true, fabItem: it.id };
 }
 
-/* ---------- sheet (finestre dal basso) ---------- */
+/* ---------- finestre dal basso (sheet) ---------- */
 const sheetRoot = $('#sheet-root');
-function openSheet(title, body) {
+let sheetOpen = false;
+
+function openSheet(title, body, opts = {}) {
   sheetRoot.innerHTML = `
     <div class="overlay" data-action="close-sheet"></div>
     <div class="sheet" role="dialog" aria-modal="true" aria-label="${esc(title)}">
       <div class="grab"></div>
-      <div class="head"><h2>${esc(title)}</h2><button class="icon-btn" data-action="close-sheet" aria-label="Chiudi">✕</button></div>
+      ${title ? `<div class="head"><h2>${esc(title)}</h2></div>` : ''}
       ${body}
     </div>`;
   document.body.style.overflow = 'hidden';
+  sheetOpen = true;
+  if (!opts.noSwipe) enableSwipe($('.sheet', sheetRoot));
 }
-function closeSheet() { sheetRoot.innerHTML = ''; document.body.style.overflow = ''; }
+
+function closeSheetNow() { sheetRoot.innerHTML = ''; document.body.style.overflow = ''; sheetOpen = false; }
+function closeSheet() {
+  const sh = $('.sheet', sheetRoot), ov = $('.overlay', sheetRoot);
+  if (!sh) { closeSheetNow(); return; }
+  sh.style.transition = 'transform .2s ease-in'; sh.style.transform = 'translateY(100%)';
+  if (ov) { ov.style.transition = 'opacity .2s'; ov.style.opacity = '0'; }
+  setTimeout(closeSheetNow, 190);
+}
+
+// Trascina verso il basso per chiudere.
+function enableSwipe(sheet) {
+  let startY = 0, dy = 0, dragging = false, t0 = 0;
+  sheet.addEventListener('touchstart', (e) => {
+    if (e.touches.length !== 1) return;
+    const onHandle = !!e.target.closest('.grab,.head');
+    if (sheet.scrollTop > 0 && !onHandle) return;
+    startY = e.touches[0].clientY; dy = 0; dragging = true; t0 = Date.now();
+    sheet.style.transition = 'none';
+  }, { passive: true });
+  sheet.addEventListener('touchmove', (e) => {
+    if (!dragging) return;
+    if (sheet.scrollTop > 0) { dragging = false; sheet.style.transform = ''; return; }
+    dy = e.touches[0].clientY - startY;
+    if (dy <= 0) { dy = 0; sheet.style.transform = ''; return; }
+    if (e.cancelable) e.preventDefault();
+    sheet.style.transform = `translateY(${dy}px)`;
+    const ov = $('.overlay', sheetRoot); if (ov) ov.style.opacity = String(Math.max(0.2, 1 - dy / 500));
+  }, { passive: false });
+  const end = () => {
+    if (!dragging) return;
+    dragging = false;
+    const v = dy / Math.max(1, Date.now() - t0);
+    if (dy > 110 || (v > 0.6 && dy > 40)) {
+      sheet.style.transition = 'transform .18s ease-in'; sheet.style.transform = 'translateY(100%)';
+      const ov = $('.overlay', sheetRoot); if (ov) { ov.style.transition = 'opacity .18s'; ov.style.opacity = '0'; }
+      setTimeout(closeSheetNow, 170);
+    } else {
+      sheet.style.transition = 'transform .2s ease-out'; sheet.style.transform = '';
+      const ov = $('.overlay', sheetRoot); if (ov) ov.style.opacity = '';
+    }
+  };
+  sheet.addEventListener('touchend', end);
+  sheet.addEventListener('touchcancel', end);
+}
+
+// Conferma nello stile dell'app (al posto di confirm del browser).
+function confirmDialog({ title, text, ok = 'Conferma', danger = false }) {
+  return new Promise((resolve) => {
+    const el = document.createElement('div');
+    el.className = 'dlg-wrap';
+    el.innerHTML = `
+      <div class="dlg-overlay"></div>
+      <div class="dlg" role="alertdialog" aria-modal="true" aria-label="${esc(title)}">
+        <h3>${esc(title)}</h3><p>${esc(text || '')}</p>
+        <div class="dlg-actions">
+          <button class="btn secondary" data-v="0">Annulla</button>
+          <button class="btn ${danger ? 'danger-solid' : ''}" data-v="1">${esc(ok)}</button>
+        </div>
+      </div>`;
+    const done = (v) => { document.removeEventListener('keydown', onKey, true); el.classList.add('out'); setTimeout(() => el.remove(), 150); resolve(v); };
+    const onKey = (e) => { if (e.key === 'Escape') { e.stopPropagation(); done(false); } };
+    el.addEventListener('click', (e) => {
+      if (e.target.classList.contains('dlg-overlay')) done(false);
+      const b = e.target.closest('button[data-v]'); if (b) done(b.dataset.v === '1');
+    });
+    document.addEventListener('keydown', onKey, true);
+    document.body.appendChild(el);
+  });
+}
 
 /* --- form scadenza --- */
-function openDeadlineForm(id, presetItem) {
-  if (!state.items.length) { openItemForm(null, 'auto'); return; }
-  const dl = id ? byId(state.deadlines, id) : null;
-  const itemId = dl?.item_id || presetItem || state.items[0].id;
-  const item = byId(state.items, itemId);
-  const kind = dl?.kind || kindsFor(item.category)[0].id;
-  const k = kindOf(kind);
+function kindGrid(item, selected) {
+  return kindsFor(item, selected).map((k) =>
+    `<button type="button" class="kind ${k.id === selected ? 'sel' : ''}" data-action="pick-kind" data-kind="${k.id}">${ic(k.icon)}<span>${k.label}</span></button>`).join('');
+}
 
-  const itemOpts = state.items.map((i) => `<option value="${i.id}" ${i.id === itemId ? 'selected' : ''}>${CATS[i.category]?.icon || ''} ${esc(i.name)}</option>`).join('');
+function openDeadlineForm(id, presetItemId) {
+  if (!state.items.length) { openItemForm(null, 'casa'); return; }
+  const dl = id ? byId(state.deadlines, id) : null;
+  const itemId = dl?.item_id || presetItemId || state.items[0].id;
+  const item = byId(state.items, itemId);
+  const kind = dl?.kind || kindsFor(item)[0].id;
+  const k = kindOf(kind);
+  const lock = !!presetItemId || !!dl || state.items.length === 1;
+
+  const itemField = lock
+    ? `<input type="hidden" name="item_id" value="${itemId}">${state.items.length > 1 ? `<div class="for-item">${tile(CATS[item.category]?.icon, item.category)}<span>${esc(item.name)}</span></div>` : ''}`
+    : `<label>Per quale?<select name="item_id">${state.items.map((i) => `<option value="${i.id}" ${i.id === itemId ? 'selected' : ''}>${esc(i.name)} (${CATS[i.category]?.label})</option>`).join('')}</select></label>`;
   const recOpts = Object.entries(REC).map(([v, r]) => `<option value="${v}" ${(dl?.recurrence || k.rec) === v ? 'selected' : ''}>${r.label}</option>`).join('');
 
   openSheet(dl ? 'Modifica scadenza' : 'Nuova scadenza', `
     <form id="dl-form" data-id="${dl?.id || ''}">
-      ${dl ? '' : `
-      <details class="paste">
-        <summary>📋 Incolla il testo di un'email</summary>
-        <textarea id="paste-text" rows="4" placeholder="Incolla qui l'email dell'assicurazione, della bolletta, del bollo…"></textarea>
-        <button type="button" class="btn small" data-action="parse-paste">Compila i campi per me</button>
-        <p>Cerco io data di scadenza, importo e tipo. Controlla sempre prima di salvare.</p>
-      </details>`}
-      <label>Auto o casa<select name="item_id">${itemOpts}</select></label>
-      <label>Cosa<select name="kind">${kindOptions(item.category, kind)}</select></label>
-      <label>Nome<input name="title" value="${esc(dl?.title || k.label)}" required></label>
+      ${itemField}
+      <div class="flabel">Che cosa?</div>
+      <div class="kinds" id="kind-grid">${kindGrid(item, kind)}</div>
+      <input type="hidden" name="kind" value="${kind}">
       <div class="row2">
         <label>Scadenza<input type="date" name="due_date" required value="${dl?.due_date || ''}"></label>
-        <label>Importo (€)<input type="number" name="amount" step="0.01" min="0" inputmode="decimal" placeholder="facoltativo" value="${dl?.amount ?? ''}"></label>
+        <label>Importo (€)<input type="number" name="amount" step="0.01" min="0" inputmode="decimal" placeholder="se lo sai" value="${dl?.amount ?? ''}"></label>
       </div>
       <label>Si ripete<select name="recurrence">${recOpts}</select></label>
-      <label>Note<textarea name="note" rows="2" placeholder="Numero polizza, contratto…">${esc(dl?.note || '')}</textarea></label>
+      <details class="more">
+        <summary>Altre opzioni</summary>
+        <label>Nome<input name="title" value="${esc(dl?.title || k.label)}" required></label>
+        <label>Note<textarea name="note" rows="2" placeholder="Numero polizza, contratto…">${esc(dl?.note || '')}</textarea></label>
+        ${dl ? '' : `
+        <div class="paste">
+          <div class="flabel">Compila da un'email</div>
+          <textarea id="paste-text" rows="3" placeholder="Incolla qui il testo dell'email dell'assicurazione, della bolletta…"></textarea>
+          <button type="button" class="btn secondary small" data-action="parse-paste">Compila i campi</button>
+          <p class="hint">Cerco io data, importo e tipo. Controlla sempre prima di salvare.</p>
+        </div>`}
+      </details>
       <div class="actions">
         <button class="btn" type="submit">Salva</button>
-        ${dl ? `<button type="button" class="btn secondary" data-action="${dl.paid ? 'reopen-form' : 'pay-form'}" data-id="${dl.id}">${dl.paid ? 'Riapri (non pagata)' : '✓ Segna come pagata'}</button>
-        <button type="button" class="btn danger" data-action="delete-deadline" data-id="${dl.id}">Elimina</button>` : ''}
+        ${dl ? `<button type="button" class="btn secondary" data-action="${dl.paid ? 'reopen-form' : 'pay-form'}" data-id="${dl.id}">${dl.paid ? 'Segna come non pagata' : 'Segna come pagata'}</button>
+        <button type="button" class="btn danger" data-action="delete-deadline" data-id="${dl.id}">${ic('trash')}Elimina</button>` : ''}
       </div>
     </form>`);
   const form = $('#dl-form');
   form.dataset.lastKindLabel = k.label;
-  if (!dl) setTimeout(() => form.elements.due_date.focus({ preventScroll: true }), 50);
+  if (!dl) setTimeout(() => form.elements.due_date.focus({ preventScroll: true }), 60);
 }
-const kindOptions = (cat, sel) => kindsFor(cat, sel).map((x) => `<option value="${x.id}" ${x.id === sel ? 'selected' : ''}>${x.icon} ${x.label}</option>`).join('');
 
-function onDeadlineFormChange(e) {
-  const form = e.target.closest('#dl-form');
-  if (!form) return;
-  const f = form.elements;
-  if (e.target.name === 'item_id') {
-    const cat = byId(state.items, f.item_id.value)?.category || 'altro';
-    const cur = f.kind.value;
-    const list = kindsFor(cat);
-    const keep = list.some((x) => x.id === cur) ? cur : list[0].id;
-    f.kind.innerHTML = kindOptions(cat, keep);
-    applyKind(form, keep);
-  } else if (e.target.name === 'kind') {
-    applyKind(form, f.kind.value);
-  }
-}
 function applyKind(form, kindId) {
   const f = form.elements; const k = kindOf(kindId);
+  f.kind.value = kindId;
+  form.querySelectorAll('.kind').forEach((b) => b.classList.toggle('sel', b.dataset.kind === kindId));
   if (!form.dataset.id) f.recurrence.value = k.rec;
   if (!f.title.value || f.title.value === form.dataset.lastKindLabel) f.title.value = k.label;
   form.dataset.lastKindLabel = k.label;
 }
 
+function onDeadlineFormChange(e) {
+  const form = e.target.closest('#dl-form');
+  if (!form || e.target.name !== 'item_id') return;
+  const item = byId(state.items, form.elements.item_id.value);
+  const list = kindsFor(item);
+  const cur = form.elements.kind.value;
+  const keep = list.some((x) => x.id === cur) ? cur : list[0].id;
+  $('#kind-grid').innerHTML = kindGrid(item, keep);
+  applyKind(form, keep);
+}
+
 async function onDeadlineSubmit(form) {
   const f = form.elements; const id = form.dataset.id || null;
-  const amount = f.amount.value === '' ? null : Number(f.amount.value);
   const fields = {
     item_id: f.item_id.value, kind: f.kind.value, title: f.title.value.trim() || kindOf(f.kind.value).label,
-    due_date: f.due_date.value, amount, recurrence: f.recurrence.value, note: f.note.value.trim() || null,
+    due_date: f.due_date.value, amount: f.amount.value === '' ? null : Number(f.amount.value),
+    recurrence: f.recurrence.value, note: f.note.value.trim() || null,
   };
   if (!fields.due_date) { toast('Manca la data di scadenza'); return; }
-  if (!id) { fields.paid = false; }
+  if (!id) fields.paid = false;
   const ok = await saveDeadline(id, fields);
-  if (ok) { closeSheet(); render(); toast(id ? 'Salvato ✓' : 'Scadenza aggiunta ✓'); }
+  if (ok) { closeSheetNow(); render(); toast(id ? 'Salvato' : 'Scadenza aggiunta'); }
 }
 
 /* --- incolla email --- */
@@ -598,8 +720,6 @@ function parseEmailText(raw) {
   const text = raw.replace(/\s+/g, ' ');
   const res = {};
   for (const [kind, rx] of KIND_HINTS) if (rx.test(text)) { res.kind = kind; break; }
-
-  // date
   const dates = [];
   let m;
   const rxNum = /(\d{1,2})[\/.\-](\d{1,2})[\/.\-](\d{2,4})/g;
@@ -614,8 +734,6 @@ function parseEmailText(raw) {
   const future = dates.filter((d) => d.iso >= today).sort((a, b) => a.iso.localeCompare(b.iso));
   const pick = keyDate || future[0] || dates[0];
   if (pick) res.due_date = pick.iso;
-
-  // importi
   const amts = [];
   const rxAmt = /(?:€|eur(?:o)?\.?)\s*(\d{1,3}(?:\.\d{3})*(?:,\d{1,2})?|\d+(?:,\d{1,2})?)|(\d{1,3}(?:\.\d{3})*,\d{2}|\d+,\d{2})\s*(?:€|eur(?:o)?\b)/gi;
   while ((m = rxAmt.exec(text))) {
@@ -631,91 +749,158 @@ function parseEmailText(raw) {
 
 function applyPaste(form) {
   const text = $('#paste-text').value;
-  if (!text.trim()) { toast('Incolla prima il testo dell\'email'); return; }
+  if (!text.trim()) { toast("Incolla prima il testo dell'email"); return; }
   const r = parseEmailText(text);
-  const f = form.elements;
-  const found = [];
+  const f = form.elements; const found = [];
   if (r.kind) {
-    const cat = byId(state.items, f.item_id.value)?.category || 'altro';
-    f.kind.innerHTML = kindOptions(cat, r.kind);
-    f.kind.value = r.kind;
-    form.dataset.lastKindLabel = '';
-    f.title.value = '';
-    applyKind(form, r.kind);
-    found.push(kindOf(r.kind).label);
+    const item = byId(state.items, f.item_id.value);
+    if (!kindsFor(item).some((x) => x.id === r.kind)) { $('#kind-grid').innerHTML = kindGrid(item, r.kind); }
+    form.dataset.lastKindLabel = ''; f.title.value = '';
+    applyKind(form, r.kind); found.push(kindOf(r.kind).label);
   }
   if (r.due_date) { f.due_date.value = r.due_date; found.push('scadenza ' + fmtDate(r.due_date)); }
   if (r.amount != null) { f.amount.value = r.amount; found.push(money(r.amount)); }
   toast(found.length ? 'Ho trovato: ' + found.join(', ') + '. Controlla i dati.' : 'Non ho trovato date o importi: compila a mano.');
-  if (found.length) $('details.paste').open = false;
+  if (found.length) { const d = $('details.more'); if (d) d.open = false; }
 }
 
 /* --- form elemento --- */
-function openItemForm(id, presetCat) {
+function openItemForm(id, cat) {
   const it = id ? byId(state.items, id) : null;
-  const cat = it?.category || presetCat || 'auto';
-  const ph = { auto: 'es. Fiat Panda', casa: 'es. Appartamento in affitto', altro: 'es. Abbonamenti' };
-  openSheet(it ? 'Modifica' : 'Nuovo elemento', `
-    <form id="item-form" data-id="${it?.id || ''}">
-      <div class="seg">
-        ${Object.entries(CATS).map(([k, c]) => `<input type="radio" name="category" id="c-${k}" value="${k}" ${k === cat ? 'checked' : ''}><label for="c-${k}">${c.icon} ${c.label}</label>`).join('')}
-      </div>
-      <label>Nome<input name="name" required value="${esc(it?.name || '')}" placeholder="${ph[cat]}"></label>
-      <label>Note<textarea name="note" rows="2" placeholder="Targa, indirizzo, proprietario…">${esc(it?.note || '')}</textarea></label>
-      <div class="actions">
-        <button class="btn" type="submit">Salva</button>
-        ${it ? `<button type="button" class="btn danger" data-action="delete-item" data-id="${it.id}">Elimina (con tutte le sue scadenze)</button>` : ''}
-      </div>
+  const category = it?.category || cat || 'casa';
+  const c = CATS[category];
+  const sub = it?.subtype || (category === 'casa' ? 'affitto' : '');
+  openSheet(it ? 'Modifica' : c.add, `
+    <form id="item-form" data-id="${it?.id || ''}" data-cat="${category}">
+      <label>Nome<input name="name" required value="${esc(it?.name || '')}" placeholder="${esc(c.ph)}" autocomplete="off"></label>
+      ${it ? '' : `<div class="sugg">${c.sugg.map((s) => `<button type="button" class="chip" data-action="sugg" data-v="${esc(s)}">${esc(s)}</button>`).join('')}</div>`}
+      ${category === 'casa' ? `
+      <div class="flabel">Com'è la casa?</div>
+      <div class="seg two">
+        <input type="radio" name="subtype" id="st-a" value="affitto" ${sub === 'affitto' ? 'checked' : ''}><label for="st-a">In affitto</label>
+        <input type="radio" name="subtype" id="st-p" value="proprieta" ${sub === 'proprieta' ? 'checked' : ''}><label for="st-p">Di proprietà</label>
+      </div>` : ''}
+      <label>Note (facoltativo)<input name="note" value="${esc(it?.note || '')}" placeholder="Targa, indirizzo…" autocomplete="off"></label>
+      <div class="actions"><button class="btn" type="submit">Salva</button></div>
     </form>`);
-  if (!it) setTimeout(() => $('#item-form').elements.name.focus({ preventScroll: true }), 50);
+  if (!it) setTimeout(() => $('#item-form').elements.name.focus({ preventScroll: true }), 60);
 }
 
 async function onItemSubmit(form) {
-  const f = form.elements; const id = form.dataset.id || null;
-  const r = await saveItem(id, { category: f.category.value, name: f.name.value.trim(), note: f.note.value.trim() || null });
+  const f = form.elements; const id = form.dataset.id || null; const category = form.dataset.cat;
+  const fields = { name: f.name.value.trim(), note: f.note.value.trim() || null };
+  if (!id) fields.category = category;
+  if (category === 'casa') fields.subtype = f.subtype?.value || null;
+  const r = await saveItem(id, fields);
   if (!r) return;
-  closeSheet(); render();
-  if (!id) { toast('Aggiunto ✓ — ora inserisci le sue scadenze'); openDeadlineForm(null, r.id); }
+  closeSheetNow();
+  if (!id) {
+    state.tab = r.category; state.itemId = r.id; state.anim = 'push'; render(); window.scrollTo(0, 0);
+    openGuided(r.id);
+  } else { render(); toast('Salvato'); }
 }
 
-/* --- dettaglio elemento --- */
-function openItemDetail(id) {
+/* --- inserimento guidato: le voci principali in un'unica schermata --- */
+// Voci proposte per tipo. Le altre si aggiungono dopo con il pulsante "Scadenza".
+const GUIDE = {
+  casa_affitto: ['affitto', 'luce', 'gas', 'internet'],
+  casa_proprieta: ['luce', 'gas', 'internet', 'imu', 'rifiuti'],
+  mezzi: ['assicurazione', 'bollo', 'revisione', 'tagliando'],
+};
+// Per queste la persona ricorda "quando l'ho fatto l'ultima volta": la prossima la calcoliamo noi.
+const LAST_KINDS = new Set(['revisione', 'tagliando', 'caldaia', 'gomme']);
+
+function openGuided(itemId) {
+  const item = byId(state.items, itemId);
+  if (!item) return;
+  const ids = GUIDE[item.category === 'casa' ? 'casa_' + (item.subtype || 'affitto') : item.category];
+  if (!ids) { openDeadlineForm(null, itemId); return; }
+  const rows = ids.map((id) => {
+    const k = kindOf(id); const last = LAST_KINDS.has(id); const m = REC[k.rec].m;
+    const every = m === 12 ? 'ogni anno' : m === 24 ? 'ogni 2 anni' : '';
+    return `
+    <div class="gk">
+      <div class="gk-h">${tile(k.icon, item.category)}
+        <div><div class="t">${k.label}</div>
+        <div class="hint">${last ? `Quando l'hai fatto l'ultima volta?${every ? ` Poi il promemoria sarà ${every}.` : ''}` : 'Quando scade o quando è il prossimo pagamento?'}</div></div></div>
+      <div class="row2">
+        <label>${last ? 'Fatto il' : 'Scadenza'}<input type="date" name="d_${id}"></label>
+        <label>Importo (€)<input type="number" name="a_${id}" step="0.01" min="0" inputmode="decimal" placeholder="se lo sai"></label>
+      </div>
+    </div>`;
+  }).join('');
+  openSheet('Cosa vuoi tenere sotto controllo?', `
+    <p class="hint" style="margin:-4px 0 14px">Compila solo quello che sai. Le voci vuote vengono ignorate e il resto lo aggiungi quando vuoi.</p>
+    <form id="guided-form" data-item="${itemId}">
+      ${rows}
+      <div class="actions">
+        <button class="btn" type="submit">Salva</button>
+        <button type="button" class="btn secondary" data-action="close-sheet">Lo faccio dopo</button>
+      </div>
+    </form>`);
+}
+
+async function onGuidedSubmit(form) {
+  const itemId = form.dataset.item; const f = form.elements;
+  const ids = (GUIDE[(() => { const it = byId(state.items, itemId); return it.category === 'casa' ? 'casa_' + (it.subtype || 'affitto') : it.category; })()]) || [];
+  let n = 0;
+  for (const id of ids) {
+    const date = f['d_' + id].value;
+    if (!date) continue;
+    const k = kindOf(id);
+    const due = LAST_KINDS.has(id) && REC[k.rec].m ? addMonths(date, REC[k.rec].m) : date;
+    const a = f['a_' + id].value;
+    const ok = await saveDeadline(null, {
+      item_id: itemId, kind: id, title: k.label, due_date: due, amount: a === '' ? null : Number(a),
+      recurrence: k.rec, note: null, paid: false,
+    });
+    if (!ok) return;
+    n++;
+  }
+  closeSheetNow(); render();
+  toast(n ? (n === 1 ? 'Aggiunta 1 scadenza' : `Aggiunte ${n} scadenze`) : 'Fatto. Aggiungerai le scadenze quando vuoi');
+}
+
+function openItemMenu(id) {
   const it = byId(state.items, id);
   if (!it) return;
-  const w = costWindow();
-  const yearly = occurrences(w.from, w.to).filter((o) => o.dl.item_id === id && o.dl.amount != null).reduce((s, o) => s + Number(o.dl.amount), 0);
-  const open = state.deadlines.filter((d) => d.item_id === id && !d.paid);
-  const paid = state.deadlines.filter((d) => d.item_id === id && d.paid).sort((a, b) => (b.paid_on || '').localeCompare(a.paid_on || '')).slice(0, 8);
-  openSheet(`${CATS[it.category]?.icon || ''} ${it.name}`, `
-    ${it.note ? `<p class="hint" style="margin-top:-6px">${esc(it.note)}</p>` : ''}
-    <div class="card" style="box-shadow:none;background:var(--bg);padding:6px 14px">
-      <div class="stat-row"><span>Spesa prevista, 12 mesi</span><b>${eur0.format(yearly)}</b></div>
-      <div class="stat-row"><span>Al mese, in media</span><b>${eur0.format(yearly / 12)}</b></div>
-    </div>
-    <div class="group-title" style="margin-top:10px">Da pagare</div>
-    ${open.length ? `<div class="list" style="box-shadow:none;border:1px solid var(--line)">${open.map((d) => rowDeadline(d, { hideItem: true })).join('')}</div>` : '<p class="hint">Nessuna scadenza aperta.</p>'}
-    ${paid.length ? `<div class="group-title">Pagate di recente</div><div class="list" style="box-shadow:none;border:1px solid var(--line)">${paid.map((d) => rowDeadline(d, { hideItem: true })).join('')}</div>` : ''}
-    <div class="actions">
-      <button class="btn" data-action="new-deadline" data-item="${id}">+ Aggiungi scadenza</button>
-      <button class="btn secondary" data-action="edit-item" data-id="${id}">Modifica nome o categoria</button>
+  openSheet(it.name, `
+    <div class="menu">
+      <button data-action="edit-item" data-id="${id}">${ic('pencil')}<span>Modifica nome e dettagli</span></button>
+      <button class="danger" data-action="delete-item" data-id="${id}">${ic('trash')}<span>Elimina${it.category === 'casa' ? ' questa casa' : it.category === 'mezzi' ? ' questo mezzo' : ''}</span></button>
     </div>`);
 }
 
 /* --- impostazioni --- */
+function inviteText() {
+  return `Ti invito nel nostro Scadenziario! Apri ${location.origin}, crea un account e inserisci questo codice: ${state.household?.invite_code}`;
+}
+
 function openSettings() {
   const open = state.deadlines.filter((d) => !d.paid).length;
+  const hh = state.household;
+  const space = MODE === 'cloud' && hh ? `
+    <div class="card soft">
+      <div class="space-head">${ic('users')}<div><div class="t">${esc(hh.name)}</div>
+        <div class="hint">${state.members === 1 ? 'Ci sei solo tu, per ora' : state.members + ' persone condividono questi dati'}</div></div></div>
+      <div class="hint" style="margin:12px 0 6px">Per condividere le scadenze con un'altra persona, dalle questo codice. Dovrà creare un account e inserirlo.</div>
+      <div class="code" id="invite-code">${esc(hh.invite_code)}</div>
+      <div class="two-btn">
+        <button class="btn secondary" data-action="copy-code">${ic('copy')}Copia</button>
+        <button class="btn" data-action="share-code">${ic('share')}Invia</button>
+      </div>
+      <button class="link" data-action="new-code">Genera un nuovo codice (il vecchio smette di funzionare)</button>
+    </div>`
+    : (MODE === 'local' ? `<div class="banner">${ic('info')}<span>Modalità prova: i dati restano solo su questo dispositivo.</span></div>` : '');
+
   openSheet('Impostazioni', `
-    ${MODE === 'cloud'
-      ? `<div class="card" style="box-shadow:none;background:var(--bg)"><div class="stat-row"><span>Account</span><b>${esc(state.user?.email || '')}</b></div>
-         <div class="stat-row"><span>Dati</span><b>sincronizzati ☁️</b></div></div>`
-      : `<div class="banner">Modalità locale: i dati restano solo su questo dispositivo. Per averli su telefono e computer collega Supabase (vedi la guida).</div>`}
-    <div class="actions" style="margin-top:6px">
-      <button class="btn secondary" data-action="export-ics" ${open ? '' : 'disabled'}>📆 Esporta nel calendario (.ics)</button>
-      <p class="hint" style="margin:-4px 2px 4px">Aggiunge le scadenze ad Apple/Google Calendar con un promemoria 7 giorni e 1 giorno prima.</p>
-      <button class="btn secondary" data-action="export-json">💾 Scarica una copia dei dati</button>
-      <label class="btn secondary" style="margin:0;text-align:center;cursor:pointer">📥 Importa una copia dei dati
-        <input type="file" id="import-file" accept="application/json,.json" hidden></label>
-      ${MODE === 'cloud' ? '<button class="btn danger" data-action="logout">Esci</button>' : ''}
+    ${space}
+    ${MODE === 'cloud' ? `<div class="stat-row"><span>Accesso come</span><b>${esc(state.user?.email || '')}</b></div>` : ''}
+    <div class="menu" style="margin-top:8px">
+      <button data-action="export-ics" ${open ? '' : 'disabled'}>${ic('calendar')}<span>Metti le scadenze nel calendario</span></button>
+      <button data-action="export-json">${ic('download')}<span>Scarica una copia dei dati</span></button>
+      <label class="menu-file">${ic('upload')}<span>Importa una copia dei dati</span><input type="file" id="import-file" accept="application/json,.json" hidden></label>
+      ${MODE === 'cloud' ? `<button class="danger" data-action="logout">${ic('logout')}<span>Esci</span></button>` : ''}
     </div>`);
 }
 
@@ -733,11 +918,9 @@ function exportICS() {
   const lines = ['BEGIN:VCALENDAR', 'VERSION:2.0', 'PRODID:-//Scadenziario//IT', 'CALSCALE:GREGORIAN', 'X-WR-CALNAME:Scadenziario'];
   for (const d of state.deadlines.filter((x) => !x.paid)) {
     const it = byId(state.items, d.item_id);
-    const start = d.due_date.replace(/-/g, '');
-    const end = addMonths(d.due_date, 0); const e = fromISO(end); e.setDate(e.getDate() + 1);
+    const e = fromISO(d.due_date); e.setDate(e.getDate() + 1);
     const summary = `${d.title}${it ? ' – ' + it.name : ''}${d.amount != null ? ' (' + money(d.amount) + ')' : ''}`;
-    lines.push('BEGIN:VEVENT', `UID:${d.id}@scadenziario`, `DTSTAMP:${stamp}`, `DTSTART;VALUE=DATE:${start}`, `DTEND;VALUE=DATE:${toISO(e).replace(/-/g, '')}`,
-      `SUMMARY:${esc2(summary)}`);
+    lines.push('BEGIN:VEVENT', `UID:${d.id}@scadenziario`, `DTSTAMP:${stamp}`, `DTSTART;VALUE=DATE:${d.due_date.replace(/-/g, '')}`, `DTEND;VALUE=DATE:${toISO(e).replace(/-/g, '')}`, `SUMMARY:${esc2(summary)}`);
     if (d.note) lines.push(`DESCRIPTION:${esc2(d.note)}`);
     if (RR[d.recurrence]) lines.push(`RRULE:${RR[d.recurrence]}`);
     for (const trig of ['-P7D', '-P1D']) lines.push('BEGIN:VALARM', 'ACTION:DISPLAY', `DESCRIPTION:${esc2(d.title)}`, `TRIGGER:${trig}`, 'END:VALARM');
@@ -754,7 +937,7 @@ async function importJSON(file) {
     if (!Array.isArray(data.items) || !Array.isArray(data.deadlines)) throw new Error('formato');
     const map = {};
     for (const it of data.items) {
-      const r = await store.insert('items', { category: it.category, name: it.name, note: it.note || null });
+      const r = normItem(await store.insert('items', { category: it.category === 'auto' ? 'mezzi' : it.category, subtype: it.subtype || null, name: it.name, note: it.note || null }));
       map[it.id] = r.id; state.items.push(r);
     }
     for (const d of data.deadlines) {
@@ -764,8 +947,8 @@ async function importJSON(file) {
         recurrence: d.recurrence || 'none', paid: !!d.paid, paid_on: d.paid_on || null, note: d.note || null,
       }));
     }
-    sortDeadlines(); closeSheet(); render();
-    toast(`Importati ${data.items.length} elementi e ${data.deadlines.length} scadenze ✓`);
+    sortDeadlines(); closeSheetNow(); render();
+    toast(`Importati ${data.items.length} elementi e ${data.deadlines.length} scadenze`);
   } catch (e) { console.error(e); toast('Il file non sembra una copia valida.'); }
 }
 
@@ -780,42 +963,179 @@ function toast(msg, action) {
   toastTimer = setTimeout(() => el.classList.remove('show'), action ? 6000 : 3500);
 }
 
+/* ---------- accesso, registrazione, spazio condiviso (cloud) ---------- */
+function renderLogin() {
+  const signup = state.authMode === 'signup';
+  app.innerHTML = `
+    <div class="login">
+      <img class="logo" src="icons/icon-192.png" alt="">
+      <h1>Scadenziario</h1>
+      <p class="lead">${signup ? 'Crea il tuo account' : 'Accedi per vedere le tue scadenze'}</p>
+      <form id="login-form">
+        <label>Email<input type="email" name="email" autocomplete="email" required></label>
+        <label>Password<input type="password" name="password" autocomplete="${signup ? 'new-password' : 'current-password'}" minlength="6" required></label>
+        <p class="err" id="login-err" role="alert"></p>
+        <button class="btn" type="submit">${signup ? 'Crea account' : 'Accedi'}</button>
+      </form>
+      <div class="auth-links">
+        <button class="link" data-action="auth-toggle">${signup ? 'Ho già un account: accedi' : 'Non hai un account? Registrati'}</button>
+        ${signup ? '' : '<button class="link" data-action="forgot">Password dimenticata?</button>'}
+      </div>
+    </div>`;
+}
+
+function renderOnboarding() {
+  app.innerHTML = `
+    <div class="login">
+      <img class="logo" src="icons/icon-192.png" alt="">
+      <h1>Benvenuto</h1>
+      <p class="lead">Scegli come iniziare</p>
+      <div class="card">
+        <h2>Sono il primo</h2>
+        <form id="create-hh-form">
+          <label>Come lo chiamiamo?<input name="name" value="La nostra famiglia" required></label>
+          <button class="btn" type="submit">Crea il nostro spazio</button>
+        </form>
+      </div>
+      <div class="card">
+        <h2>Ho un codice di invito</h2>
+        <form id="join-hh-form">
+          <label>Codice<input name="code" autocomplete="off" autocapitalize="characters" placeholder="es. 3F9A21BC" required></label>
+          <p class="err" id="join-err" role="alert"></p>
+          <button class="btn secondary" type="submit">Entra nello spazio</button>
+        </form>
+      </div>
+      <div class="auth-links"><button class="link" data-action="logout">Esci</button></div>
+    </div>`;
+}
+
+const authError = (e) => {
+  const m = (e?.message || '').toLowerCase();
+  if (m.includes('already')) return 'Esiste già un account con questa email.';
+  if (m.includes('password') && (m.includes('short') || m.includes('least') || m.includes('weak'))) return 'La password deve avere almeno 6 caratteri.';
+  if (m.includes('rate') || m.includes('too many')) return 'Troppi tentativi. Riprova tra qualche minuto.';
+  if (m.includes('email') && m.includes('invalid')) return "L'email non sembra valida.";
+  if (m.includes('confirm')) return "Devi prima confermare l'email: controlla la posta.";
+  return 'Email o password non corretti.';
+};
+
+async function doLogin(form) {
+  const err = $('#login-err'); err.textContent = '';
+  const email = form.elements.email.value.trim(), password = form.elements.password.value;
+  if (state.authMode === 'signup') {
+    const { data, error } = await sb.auth.signUp({ email, password, options: { emailRedirectTo: location.origin } });
+    if (error) { err.textContent = authError(error); return; }
+    if (!data.session) {
+      state.authMode = 'login'; renderLogin();
+      $('#login-err').style.color = 'var(--ok)';
+      $('#login-err').textContent = "Ti ho mandato un'email: aprila per confermare, poi accedi.";
+      return;
+    }
+    state.user = data.user; await loadData(); return;
+  }
+  const { data, error } = await sb.auth.signInWithPassword({ email, password });
+  if (error) { err.textContent = authError(error); return; }
+  state.user = data.user;
+  await loadData();
+}
+
+async function doForgot() {
+  const email = $('#login-form')?.elements.email.value.trim();
+  const err = $('#login-err');
+  if (!email) { err.style.color = ''; err.textContent = 'Scrivi qui sopra la tua email, poi premi di nuovo.'; return; }
+  const { error } = await sb.auth.resetPasswordForEmail(email, { redirectTo: location.origin });
+  err.style.color = error ? '' : 'var(--ok)';
+  err.textContent = error ? 'Non sono riuscito a inviare l\'email. Riprova tra poco.' : "Se l'email è registrata, ti ho mandato il link per scegliere una nuova password.";
+}
+
+function openNewPassword() {
+  openSheet('Scegli una nuova password', `
+    <form id="pw-form">
+      <label>Nuova password<input type="password" name="pw" minlength="6" autocomplete="new-password" required></label>
+      <p class="err" id="pw-err" role="alert"></p>
+      <div class="actions"><button class="btn" type="submit">Salva password</button></div>
+    </form>`, { noSwipe: true });
+}
+
+async function onCreateHousehold(form) {
+  const { error } = await sb.rpc('create_household', { p_name: form.elements.name.value });
+  if (error) { toast('Non sono riuscito a creare lo spazio.'); console.error(error); return; }
+  await loadData();
+}
+
+async function onJoinHousehold(form) {
+  const err = $('#join-err'); err.textContent = '';
+  const { error } = await sb.rpc('join_household', { p_code: form.elements.code.value });
+  if (error) {
+    err.textContent = error.message.includes('già') ? 'Fai già parte di uno spazio condiviso.' : 'Codice non valido. Controllalo e riprova.';
+    return;
+  }
+  await loadData();
+}
+
 /* ---------- eventi ---------- */
 document.addEventListener('click', async (e) => {
   const el = e.target.closest('[data-action]');
   if (!el) return;
   const a = el.dataset.action; const id = el.dataset.id;
-
   if (a === 'pay') { e.stopPropagation(); markPaid(id); return; }
+
   switch (a) {
-    case 'tab': state.tab = el.dataset.tab; render(); window.scrollTo(0, 0); break;
-    case 'filter': state.filter = el.dataset.f; render(); break;
+    case 'tab': state.tab = el.dataset.tab; state.itemId = null; render(); window.scrollTo(0, 0); break;
+    case 'open-item': { const it = byId(state.items, id); if (it) { state.tab = it.category; state.itemId = id; state.anim = 'push'; render(); window.scrollTo(0, 0); } break; }
+    case 'back': state.itemId = null; state.anim = 'pop'; render(); window.scrollTo(0, 0); break;
     case 'new-deadline': openDeadlineForm(null, el.dataset.item); break;
     case 'edit-deadline': openDeadlineForm(id); break;
+    case 'pick-kind': applyKind($('#dl-form'), el.dataset.kind); break;
     case 'new-item': openItemForm(null, el.dataset.cat); break;
-    case 'edit-item': openItemForm(id); break;
-    case 'open-item': openItemDetail(id); break;
+    case 'guided': openGuided(id); break;
+    case 'edit-item': openItemForm(id, byId(state.items, id)?.category); break;
+    case 'item-menu': openItemMenu(id); break;
+    case 'sugg': { const f = $('#item-form'); f.elements.name.value = el.dataset.v; if (/affitto/i.test(el.dataset.v) && f.elements.subtype) f.elements.subtype.value = 'affitto'; if (/propriet/i.test(el.dataset.v) && f.elements.subtype) f.elements.subtype.value = 'proprieta'; break; }
     case 'settings': openSettings(); break;
     case 'close-sheet': closeSheet(); break;
     case 'parse-paste': applyPaste($('#dl-form')); break;
-    case 'pay-form': closeSheet(); markPaid(id); break;
-    case 'reopen-form': closeSheet(); reopen(id); break;
-    case 'delete-deadline':
-      if (confirm('Eliminare questa scadenza?')) { await deleteDeadline(id); closeSheet(); render(); toast('Eliminata'); }
+    case 'pay-form': closeSheetNow(); markPaid(id); break;
+    case 'reopen-form': closeSheetNow(); reopen(id); break;
+    case 'delete-deadline': {
+      const dl = byId(state.deadlines, id);
+      if (await confirmDialog({ title: 'Eliminare questa scadenza?', text: dl ? `“${dl.title}” verrà rimossa.` : '', ok: 'Elimina', danger: true })) {
+        if (await deleteDeadline(id)) { closeSheetNow(); render(); toast('Eliminata'); }
+      }
       break;
+    }
     case 'delete-item': {
       const it = byId(state.items, id);
-      if (confirm(`Eliminare "${it?.name}" e tutte le sue scadenze? Non si può annullare.`)) { await deleteItem(id); closeSheet(); render(); toast('Eliminato'); }
+      const n = state.deadlines.filter((d) => d.item_id === id).length;
+      if (await confirmDialog({ title: `Eliminare “${it?.name}”?`, text: n ? `Verranno eliminate anche le sue ${n} scadenze. Non si può annullare.` : 'Non si può annullare.', ok: 'Elimina', danger: true })) {
+        if (await deleteItem(id)) { closeSheetNow(); state.itemId = null; state.anim = 'pop'; render(); toast('Eliminato'); }
+      }
       break;
     }
     case 'export-ics': exportICS(); break;
     case 'export-json': download('scadenziario-backup.json', 'application/json', JSON.stringify({ items: state.items, deadlines: state.deadlines }, null, 2)); break;
-    case 'logout': if (sb) { await sb.auth.signOut(); } closeSheet(); state.user = null; state.items = []; state.deadlines = []; render(); break;
+    case 'copy-code': try { await navigator.clipboard.writeText(state.household.invite_code); toast('Codice copiato'); } catch { toast('Copia non riuscita: scrivilo a mano'); } break;
+    case 'share-code':
+      if (navigator.share) { try { await navigator.share({ title: 'Scadenziario', text: inviteText() }); } catch {} }
+      else { try { await navigator.clipboard.writeText(inviteText()); toast('Invito copiato: incollalo in un messaggio'); } catch { toast('Condivisione non disponibile'); } }
+      break;
+    case 'new-code':
+      if (await confirmDialog({ title: 'Generare un nuovo codice?', text: 'Il codice attuale non funzionerà più. Chi è già dentro resta nello spazio.', ok: 'Genera' })) {
+        const { data, error } = await sb.rpc('regenerate_invite', { p_household: state.hid });
+        if (error) fail(error); else { state.household.invite_code = data; openSettings(); toast('Nuovo codice pronto'); }
+      }
+      break;
+    case 'auth-toggle': state.authMode = state.authMode === 'login' ? 'signup' : 'login'; renderLogin(); break;
+    case 'forgot': doForgot(); break;
+    case 'logout':
+      if (sb) await sb.auth.signOut();
+      closeSheetNow(); state.user = null; state.hid = null; state.household = null; state.items = []; state.deadlines = []; state.tab = 'home'; state.itemId = null; render();
+      break;
   }
 });
 
 document.addEventListener('keydown', (e) => {
-  if (e.key === 'Escape') closeSheet();
+  if (e.key === 'Escape' && sheetOpen) closeSheet();
   if ((e.key === 'Enter' || e.key === ' ') && e.target.matches?.('.row[role="button"]')) { e.preventDefault(); e.target.click(); }
 });
 
@@ -830,35 +1150,73 @@ document.addEventListener('submit', async (e) => {
   const btn = form.querySelector('button[type="submit"]');
   if (btn) btn.disabled = true;
   try {
-    if (form.id === 'dl-form') await onDeadlineSubmit(form);
-    else if (form.id === 'item-form') await onItemSubmit(form);
-    else if (form.id === 'login-form') await doLogin(form);
+    switch (form.id) {
+      case 'dl-form': await onDeadlineSubmit(form); break;
+      case 'item-form': await onItemSubmit(form); break;
+      case 'guided-form': await onGuidedSubmit(form); break;
+      case 'login-form': await doLogin(form); break;
+      case 'create-hh-form': await onCreateHousehold(form); break;
+      case 'join-hh-form': await onJoinHousehold(form); break;
+      case 'pw-form': {
+        const { error } = await sb.auth.updateUser({ password: form.elements.pw.value });
+        if (error) { $('#pw-err').textContent = 'Password non valida (almeno 6 caratteri).'; } else { closeSheetNow(); toast('Password aggiornata'); }
+        break;
+      }
+    }
   } finally { if (btn && btn.isConnected) btn.disabled = false; }
 });
 
+// Scorri dal bordo sinistro verso destra per tornare indietro (pagina elemento).
+let edge = null;
+document.addEventListener('touchstart', (e) => {
+  const t = e.touches[0];
+  edge = state.itemId && !sheetOpen && t.clientX < 28 ? { x: t.clientX, y: t.clientY } : null;
+}, { passive: true });
+document.addEventListener('touchend', (e) => {
+  if (!edge) return;
+  const t = e.changedTouches[0];
+  if (t.clientX - edge.x > 70 && Math.abs(t.clientY - edge.y) < 60) { state.itemId = null; state.anim = 'pop'; render(); }
+  edge = null;
+}, { passive: true });
+
 window.addEventListener('online', () => { state.offline = false; if (MODE === 'cloud' && state.user) loadData(); });
 window.addEventListener('offline', () => { state.offline = true; render(); });
-document.addEventListener('visibilitychange', () => { if (!document.hidden && state.ready) { if (MODE === 'cloud' && state.user && !state.offline) loadData(); else render(); } });
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden || !state.ready || sheetOpen) return;
+  if (MODE === 'cloud' && state.user && state.hid && !state.offline) loadData(); else render();
+});
 
 /* ---------- avvio ---------- */
-async function doLogin(form) {
-  const err = $('#login-err'); err.textContent = '';
-  const { data, error } = await sb.auth.signInWithPassword({ email: form.elements.email.value.trim(), password: form.elements.password.value });
-  if (error) { err.textContent = 'Email o password non corretti.'; return; }
-  state.user = data.user;
-  await loadData();
+async function loadHousehold() {
+  const { data, error } = await sb.from('household_members').select('household_id, households(id,name,invite_code)').limit(1);
+  if (error) throw error;
+  const row = data?.[0];
+  state.hid = row?.household_id || null;
+  state.household = row?.households || null;
+  if (state.hid) {
+    const m = await sb.from('household_members').select('user_id');
+    state.members = m.data?.length || 1;
+  }
 }
 
 async function loadData() {
+  const snapKey = state.user ? LS + '.snap.' + state.user.id : null;
   try {
+    if (MODE === 'cloud') {
+      await loadHousehold();
+      if (!state.hid) { state.items = []; state.deadlines = []; state.loadError = ''; state.offline = false; render(); return; }
+    }
     const d = await store.load();
-    state.items = d.items; state.deadlines = d.deadlines; sortDeadlines();
+    state.items = d.items.map(normItem); state.deadlines = d.deadlines; sortDeadlines();
     state.loadError = ''; state.offline = false;
+    if (snapKey) { try { localStorage.setItem(snapKey, JSON.stringify({ items: state.items, deadlines: state.deadlines, hid: state.hid, household: state.household, members: state.members })); } catch {} }
   } catch (e) {
     console.error(e);
-    const snap = state.user && localStorage.getItem(LS + '.snap.' + state.user.id);
-    if (snap) { const d = JSON.parse(snap); state.items = d.items; state.deadlines = d.deadlines; state.offline = true; }
-    else state.loadError = 'Non riesco a caricare i dati. Controlla la connessione.';
+    const snap = snapKey && localStorage.getItem(snapKey);
+    if (snap) {
+      const d = JSON.parse(snap);
+      state.items = d.items; state.deadlines = d.deadlines; state.hid = d.hid; state.household = d.household; state.members = d.members || 1; state.offline = true;
+    } else state.loadError = 'Non riesco a caricare i dati. Controlla la connessione.';
   }
   render();
 }
@@ -873,22 +1231,21 @@ function loadScript(src) {
 
 async function init() {
   if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(() => {});
-  if (MODE === 'local') {
-    state.ready = true;
-    await loadData();
-    return;
-  }
+  if (MODE === 'local') { state.ready = true; await loadData(); return; }
   try {
     await loadScript('https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2');
     sb = window.supabase.createClient(CFG.supabaseUrl, CFG.supabaseKey, { auth: { persistSession: true, autoRefreshToken: true } });
   } catch {
     state.ready = true; state.loadError = 'Non riesco a caricare i componenti. Riprova con la connessione attiva.';
-    app.innerHTML = `<div class="login"><div class="banner">${esc(state.loadError)}</div></div>`;
+    app.innerHTML = `<div class="login"><div class="banner">${ic('alert')}<span>${esc(state.loadError)}</span></div></div>`;
     return;
   }
   const { data } = await sb.auth.getSession();
   state.user = data.session?.user || null;
-  sb.auth.onAuthStateChange((ev) => { if (ev === 'SIGNED_OUT') { state.user = null; render(); } });
+  sb.auth.onAuthStateChange((ev) => {
+    if (ev === 'SIGNED_OUT') { state.user = null; render(); }
+    if (ev === 'PASSWORD_RECOVERY') setTimeout(openNewPassword, 300);
+  });
   state.ready = true;
   if (state.user) await loadData(); else render();
 }
