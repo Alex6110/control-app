@@ -1,5 +1,5 @@
 -- ============================================================
--- Scadenziario v2 – schema Supabase con spazio condiviso
+-- Scadenziario – schema Supabase (v2 spazio condiviso + v3 schede)
 --
 -- Incolla tutto nel SQL Editor di Supabase e premi "Run".
 -- Vale sia per un progetto nuovo sia per uno che ha già la v1:
@@ -176,4 +176,36 @@ create policy "items_household" on public.items
 
 drop policy if exists "deadlines_household" on public.deadlines;
 create policy "deadlines_household" on public.deadlines
+  for all to authenticated using (public.is_member(household_id)) with check (public.is_member(household_id));
+
+
+-- ============================================================
+-- v3: schede specifiche (dettagli per casa/mezzo/altro), rate con fine, registro lavori
+-- Additivo: non tocca i dati esistenti. Si può rilanciare senza danni.
+-- ============================================================
+alter table public.items     add column if not exists details jsonb not null default '{}'::jsonb;  -- dati delle schede
+alter table public.deadlines add column if not exists section text;                                 -- a quale scheda appartiene
+alter table public.deadlines add column if not exists until   date;                                 -- fine delle rate (mutuo, finanziamento)
+
+-- Lavori, riparazioni e ricambi (es. "cambio olio", "pastiglie freni", "idraulico")
+create table if not exists public.item_logs (
+  id           uuid primary key default gen_random_uuid(),
+  household_id uuid not null references public.households(id) on delete cascade,
+  user_id      uuid not null default auth.uid() references auth.users(id) on delete cascade,
+  item_id      uuid not null references public.items(id) on delete cascade,
+  kind         text not null default 'lavoro',      -- lavoro | ricambio
+  title        text not null,
+  done_on      date not null default current_date,
+  km           integer,
+  amount       numeric(10,2),
+  place        text,
+  note         text,
+  created_at   timestamptz not null default now()
+);
+create index if not exists item_logs_item on public.item_logs (item_id, done_on desc);
+create index if not exists item_logs_household on public.item_logs (household_id);
+
+alter table public.item_logs enable row level security;
+drop policy if exists "item_logs_household" on public.item_logs;
+create policy "item_logs_household" on public.item_logs
   for all to authenticated using (public.is_member(household_id)) with check (public.is_member(household_id));

@@ -1,6 +1,6 @@
 // Service worker: fa funzionare l'app anche offline.
 // Cambia VERSION quando pubblichi una nuova versione per forzare l'aggiornamento.
-const VERSION = "v3";
+const VERSION = "v5";
 const SHELL = "scadenziario-shell-" + VERSION;
 const RUNTIME = "scadenziario-runtime-" + VERSION;
 const FILES = [
@@ -10,6 +10,7 @@ const FILES = [
   "app.js",
   "config.js",
   "icons.js",
+  "schede.js",
   "manifest.webmanifest",
   "icons/icon-192.png",
   "icons/icon-512.png",

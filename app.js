@@ -23,12 +23,19 @@ const CATS = {
   },
   altro: {
     label: 'Altro', icon: 'shapes', add: 'Aggiungi', title: 'Altro',
-    empty: 'Qui puoi tenere abbonamenti, visite mediche, animali e tutto il resto.',
+    empty: 'Qui puoi tenere documenti, salute, animali, abbonamenti, garanzie e tutto il resto.',
     sugg: ['Abbonamenti', 'Salute', 'Animali', 'Lavoro'], ph: 'es. Abbonamenti',
   },
 };
 const CAT_ORDER = ['casa', 'mezzi', 'altro'];
-const SUBTYPES = { affitto: 'In affitto', proprieta: 'Di proprietà' };
+const TYPES = SCHEDE.TYPES, SECTIONS = SCHEDE.SECTIONS;
+
+// Il "tipo" di un elemento (Auto/Moto, In affitto/Di proprietà, Documenti/Salute/…) decide quali schede ha.
+function typeOf(cat, subtype) {
+  const list = TYPES[cat] || [];
+  return list.find((t) => t.id === subtype) || (cat === 'altro' ? list.find((t) => t.id === 'libero') : list[0]) || list[0];
+}
+const itemType = (it) => typeOf(it.category, it.subtype);
 
 const REC = {
   none: { label: 'Una sola volta', m: 0 },
@@ -65,7 +72,10 @@ const KINDS = [
   { id: 'altro', label: 'Altro', icon: 'tag', rec: 'none', cats: ['mezzi', 'casa', 'altro'] },
 ];
 const kindOf = (id) => KINDS.find((k) => k.id === id) || KINDS[KINDS.length - 1];
+KINDS.push(...SCHEDE.EXTRA_KINDS);
 function kindsFor(item, keep) {
+  const t = item ? itemType(item) : null;
+  if (t?.kinds) return [...t.kinds, ...(keep && !t.kinds.includes(keep) ? [keep] : [])].map((id) => KINDS.find((k) => k.id === id)).filter(Boolean);
   const cat = item?.category || 'altro';
   return KINDS.filter((k) => k.id === keep || (k.cats.includes(cat) && (!k.only || !item?.subtype || k.only === item.subtype)));
 }
@@ -101,14 +111,14 @@ function relative(iso) {
   if (d === 1) return 'domani';
   if (d <= 31) return `tra ${d} giorni`;
   const m = Math.round(d / 30.4);
-  return m < 12 ? `tra ${m} mesi` : (m < 18 ? 'tra circa un anno' : `tra ${(m / 12).toFixed(1).replace('.', ',').replace(',0', '')} anni`);
+  return m < 12 ? (m <= 1 ? "tra circa un mese" : `tra ${m} mesi`) : (m < 18 ? "tra circa un anno" : `tra ${(m / 12).toFixed(1).replace(".", ",").replace(",0", "")} anni`);
 }
 const urgency = (iso) => { const d = diffDays(todayISO(), iso); return d < 0 ? 'late' : d <= 7 ? 'soon' : ''; };
 const tile = (icon, cat) => `<div class="tile tint-${cat || 'altro'}">${ic(icon)}</div>`;
 
 /* ---------- stato ---------- */
 const state = {
-  tab: 'home', itemId: null, items: [], deadlines: [],
+  tab: 'home', itemId: null, items: [], deadlines: [], logs: [],
   user: null, hid: null, household: null, members: 1,
   ready: false, offline: !navigator.onLine, loadError: '', authMode: 'login', anim: '',
 };
@@ -116,7 +126,8 @@ let sb = null;
 
 /* ---------- archivio: locale o Supabase ---------- */
 const LS = 'scadenziario.data.v1';
-const readLocal = () => { try { return JSON.parse(localStorage.getItem(LS)) || { items: [], deadlines: [] }; } catch { return { items: [], deadlines: [] }; } };
+const emptyData = () => ({ items: [], deadlines: [], item_logs: [] });
+const readLocal = () => { try { return { ...emptyData(), ...(JSON.parse(localStorage.getItem(LS)) || {}) }; } catch { return emptyData(); } };
 const writeLocal = (d) => localStorage.setItem(LS, JSON.stringify(d));
 const uuid = () => (crypto.randomUUID ? crypto.randomUUID() : 'id-' + Date.now() + '-' + Math.random().toString(16).slice(2));
 
@@ -135,7 +146,7 @@ const localStore = {
   async remove(t, id) {
     const d = readLocal();
     d[t] = d[t].filter((x) => x.id !== id);
-    if (t === 'items') d.deadlines = d.deadlines.filter((x) => x.item_id !== id);
+    if (t === 'items') { d.deadlines = d.deadlines.filter((x) => x.item_id !== id); d.item_logs = d.item_logs.filter((x) => x.item_id !== id); }
     writeLocal(d);
   },
 };
@@ -143,23 +154,24 @@ const localStore = {
 const numAmount = (r) => (r && r.amount != null ? { ...r, amount: Number(r.amount) } : r);
 const cloudStore = {
   async load() {
-    const [a, b] = await Promise.all([
+    const [a, b, c] = await Promise.all([
       sb.from('items').select('*').order('created_at'),
       sb.from('deadlines').select('*').order('due_date'),
+      sb.from('item_logs').select('*').order('done_on', { ascending: false }),
     ]);
     if (a.error) throw a.error;
     if (b.error) throw b.error;
-    return { items: a.data, deadlines: b.data.map(numAmount) };
+    return { items: a.data, deadlines: b.data.map(numAmount), item_logs: c.error ? [] : c.data.map(numAmount) };
   },
   async insert(t, row) {
     const { data, error } = await sb.from(t).insert({ household_id: state.hid, ...row }).select().single();
     if (error) throw error;
-    return t === 'deadlines' ? numAmount(data) : data;
+    return t === 'items' ? data : numAmount(data);
   },
   async update(t, id, patch) {
     const { data, error } = await sb.from(t).update(patch).eq('id', id).select().single();
     if (error) throw error;
-    return t === 'deadlines' ? numAmount(data) : data;
+    return t === 'items' ? data : numAmount(data);
   },
   async remove(t, id) {
     const { error } = await sb.from(t).delete().eq('id', id);
@@ -176,7 +188,7 @@ function canWrite() {
 /* ---------- operazioni sui dati ---------- */
 const byId = (arr, id) => arr.find((x) => x.id === id);
 const sortDeadlines = () => state.deadlines.sort((a, b) => a.due_date.localeCompare(b.due_date));
-const normItem = (i) => (i.category === 'auto' ? { ...i, category: 'mezzi' } : i);
+const normItem = (i) => ({ ...i, category: i.category === 'auto' ? 'mezzi' : i.category, details: i.details || {} });
 
 async function saveItem(id, fields) {
   if (!canWrite()) return null;
@@ -198,6 +210,7 @@ async function deleteItem(id) {
     await store.remove('items', id);
     state.items = state.items.filter((x) => x.id !== id);
     state.deadlines = state.deadlines.filter((x) => x.item_id !== id);
+    state.logs = state.logs.filter((x) => x.item_id !== id);
     return true;
   } catch (e) { fail(e); return false; }
 }
@@ -225,34 +238,48 @@ async function deleteDeadline(id) {
   } catch (e) { fail(e); return false; }
 }
 
-// Segna come pagata. Se la scadenza si ripete, crea subito la successiva.
+// Segna come pagata. Se la scadenza si ripete, crea subito la successiva
+// (e si ferma da solo alla fine delle rate di un mutuo o di un finanziamento).
 async function markPaid(id) {
   if (!canWrite()) return;
   const dl = byId(state.deadlines, id);
   if (!dl) return;
+  const sec = dl.section ? SECTIONS[dl.section] : null;
+  const it = byId(state.items, dl.item_id);
+  const prevDetails = it?.details;
   let nextId = null;
   try {
     const r = await store.update('deadlines', id, { paid: true, paid_on: todayISO() });
     state.deadlines = state.deadlines.map((x) => (x.id === id ? r : x));
     const step = REC[dl.recurrence]?.m || 0;
     if (step) {
-      const next = await store.insert('deadlines', {
-        item_id: dl.item_id, kind: dl.kind, title: dl.title, due_date: addMonths(dl.due_date, step),
-        amount: dl.amount, recurrence: dl.recurrence, paid: false, note: dl.note,
-      });
-      nextId = next.id;
-      state.deadlines.push(next);
+      let nd = addMonths(dl.due_date, step);
+      if (sec?.eom) nd = SCHEDE.eom(nd);
+      if (!dl.until || nd <= dl.until) {
+        const next = await store.insert('deadlines', {
+          item_id: dl.item_id, kind: dl.kind, title: dl.title, due_date: nd, amount: dl.amount,
+          recurrence: dl.recurrence, paid: false, note: dl.note, section: dl.section || null, until: dl.until || null,
+        });
+        nextId = next.id;
+        state.deadlines.push(next);
+      }
+    }
+    // "ultima volta" della scheda (es. ultima revisione) = oggi
+    if (sec?.last && it) {
+      const s = { ...(it.details?.s || {}) };
+      s[dl.section] = { ...(s[dl.section] || {}), [sec.last]: todayISO() };
+      await saveItem(it.id, { details: { ...(it.details || {}), s } });
     }
     sortDeadlines();
   } catch (e) { fail(e); render(); return; }
   render();
-  toast(nextId ? 'Pagata. Ho già messo la prossima in calendario' : 'Pagata', {
+  toast(nextId ? 'Pagata. Ho già messo la prossima in calendario' : 'Fatto', {
     label: 'Annulla',
-    fn: async () => { await reopen(id, nextId); },
+    fn: async () => { await reopen(id, nextId, it && prevDetails ? { itemId: it.id, details: prevDetails } : null); },
   });
 }
 
-async function reopen(id, removeNextId) {
+async function reopen(id, removeNextId, restore) {
   if (!canWrite()) return;
   try {
     if (removeNextId) {
@@ -261,9 +288,26 @@ async function reopen(id, removeNextId) {
     }
     const r = await store.update('deadlines', id, { paid: false, paid_on: null });
     state.deadlines = state.deadlines.map((x) => (x.id === id ? r : x));
+    if (restore) await saveItem(restore.itemId, { details: restore.details });
     sortDeadlines();
   } catch (e) { fail(e); }
   render();
+}
+
+// Lavori e ricambi
+async function saveLog(id, fields) {
+  if (!canWrite()) return null;
+  try {
+    if (id) {
+      const r = await store.update('item_logs', id, fields);
+      state.logs = state.logs.map((x) => (x.id === id ? r : x));
+    } else state.logs.push(await store.insert('item_logs', fields));
+    return true;
+  } catch (e) { fail(e); return null; }
+}
+async function deleteLog(id) {
+  if (!canWrite()) return false;
+  try { await store.remove('item_logs', id); state.logs = state.logs.filter((x) => x.id !== id); return true; } catch (e) { fail(e); return false; }
 }
 
 function fail(e) {
@@ -285,7 +329,7 @@ function occurrences(from, to, filter) {
       while (d < from) d = addMonths(d, step);
     }
     let guard = 0;
-    while (d <= to && guard++ < 500) {
+    while (d <= to && (!dl.until || d <= dl.until) && guard++ < 500) {
       out.push({ dl, date: d });
       if (!step) break;
       d = addMonths(d, step);
@@ -488,7 +532,7 @@ function pageSection(cat) {
     const next = own[0];
     const yearly = sum.byItem[it.id] || 0;
     const u = next ? urgency(next.due_date) : '';
-    const meta = it.subtype ? SUBTYPES[it.subtype] + ' · ' : '';
+    const meta = (itemType(it)?.label || '') + ' · ';
     return `
       <button class="row" data-action="open-item" data-id="${it.id}">
         ${tile(c.icon, cat)}
@@ -506,24 +550,111 @@ function pageSection(cat) {
 }
 
 /* --- pagina: dettaglio elemento --- */
+const openDl = (itemId, sid) => state.deadlines.find((d) => d.item_id === itemId && d.section === sid && !d.paid);
+
+function monthYear(iso) { const d = fromISO(iso); return `${MONTHS_SHORT[d.getMonth()]} ${d.getFullYear()}`; }
+
+// Stato di una scheda: che cosa mostra il riquadro.
+function sectionStatus(it, sid) {
+  const S = SECTIONS[sid];
+  const d = (it.details?.s || {})[sid];
+  const dl = openDl(it.id, sid);
+  if (S.gate && d && d[S.gate.k] === S.gate.off) return { cls: 'off', line: S.gate.offLabel || 'Non dovuto' };
+  if (dl) {
+    const u = urgency(dl.due_date);
+    let rel = relative(dl.due_date);
+    if (dl.until) rel += ` · ultima rata ${monthYear(dl.until)}`;
+    return { cls: u || 'ok', line: fmtDate(dl.due_date), rel, amt: dl.amount != null ? money(dl.amount) : '' };
+  }
+  if (state.deadlines.some((x) => x.item_id === it.id && x.section === sid && x.paid)) return { cls: 'soon', line: 'Da aggiornare', rel: 'inserisci la nuova scadenza' };
+  if (d && Object.keys(d).length) return { cls: 'info', line: 'Compilata', rel: 'senza scadenza' };
+  return { cls: 'empty', line: 'Da inserire' };
+}
+
+function sectionCard(it, sid) {
+  const S = SECTIONS[sid]; const st = sectionStatus(it, sid);
+  return `
+    <button class="scard s-${st.cls}" data-action="open-section" data-item="${it.id}" data-sec="${sid}">
+      <div class="sc-top">${tile(S.icon, it.category)}<span class="dot"></span></div>
+      <div class="sc-t">${esc(S.title)}</div>
+      <div class="sc-s">${esc(st.line)}</div>
+      ${st.rel ? `<div class="sc-r">${esc(st.rel)}</div>` : ''}
+      ${st.amt ? `<div class="sc-a">${st.amt}</div>` : ''}
+    </button>`;
+}
+
+function fieldDisplay(f, v) {
+  if (f.t === 'date') return fmtDate(v);
+  if (f.t === 'number') return `${Number(v).toLocaleString('it-IT')}${f.k === 'km' ? ' km' : ''}`;
+  if (f.t === 'money') return money(v);
+  if (f.t === 'select') return (f.opts.find((o) => o[0] === v) || [v, v])[1];
+  return String(v);
+}
+
+function identityCard(it, t) {
+  const ident = it.details?.ident || {};
+  const fields = t.ident || [];
+  if (!fields.length) return it.note ? `<p class="hint item-sub">${esc(t.label)} · ${esc(it.note)}</p>` : `<p class="hint item-sub">${esc(t.label)}</p>`;
+  const plate = ident.targa ? `<span class="plate">${esc(ident.targa)}</span>` : '';
+  const chips = fields.filter((f) => f.k !== 'targa' && ident[f.k] !== undefined && ident[f.k] !== '')
+    .map((f) => `<span class="info-chip"><i>${esc(f.l)}</i>${esc(fieldDisplay(f, ident[f.k]))}</span>`).join('');
+  return `
+    <div class="idcard">
+      <div class="id-top">${tile(t.icon, it.category)}
+        <div class="id-main"><div class="id-type">${esc(t.label)}</div>${plate}</div>
+        <button class="icon-btn" data-action="edit-ident" data-id="${it.id}" aria-label="Modifica i dati">${ic('pencil')}</button>
+      </div>
+      ${chips ? `<div class="chips-row">${chips}</div>` : `<button class="link" data-action="edit-ident" data-id="${it.id}">Aggiungi i dati${it.category === 'mezzi' ? ' (targa, date, chilometri)' : ''}</button>`}
+      ${it.note ? `<p class="hint" style="margin:10px 0 0">${esc(it.note)}</p>` : ''}
+    </div>`;
+}
+
+function logsCard(it, t) {
+  const logs = state.logs.filter((l) => l.item_id === it.id).sort((a, b) => b.done_on.localeCompare(a.done_on));
+  const total = logs.reduce((n, l) => n + (Number(l.amount) || 0), 0);
+  const rows = logs.slice(0, 10).map((l) => `
+    <div class="row" data-action="edit-log" data-id="${l.id}" role="button" tabindex="0">
+      ${tile(l.kind === 'ricambio' ? 'part' : 'wrench', it.category)}
+      <div class="main"><div class="t">${esc(l.title)}</div>
+        <div class="s">${fmtDate(l.done_on)}${l.km ? ` · ${Number(l.km).toLocaleString('it-IT')} km` : ''}${l.place ? ` · ${esc(l.place)}` : ''}</div></div>
+      <div class="right"><div class="amt">${money(l.amount)}</div></div>
+    </div>`).join('');
+  return `
+    <div class="group-title">${esc(t.log.title)}${total ? ` · ${eur0.format(total)} spesi` : ''}</div>
+    ${logs.length ? `<div class="list">${rows}</div>${logs.length > 10 ? `<p class="hint">Vedi gli ultimi 10 di ${logs.length}.</p>` : ''}`
+      : `<div class="card soft"><p class="hint" style="margin:0">Qui tieni lo storico: che cosa è stato fatto, quando e quanto è costato.</p></div>`}
+    <div class="actions"><button class="btn secondary" data-action="new-log" data-id="${it.id}">${ic('plus')}${esc(t.log.add)}</button></div>`;
+}
+
 function pageItem(it) {
+  const t = itemType(it);
   const sum = costSummary(ofItem(it.id));
-  const open = state.deadlines.filter((d) => d.item_id === it.id && !d.paid);
+  const hidden = it.details?.hidden || [];
   const paid = state.deadlines.filter((d) => d.item_id === it.id && d.paid)
-    .sort((a, b) => (b.paid_on || '').localeCompare(a.paid_on || '')).slice(0, 8);
-  const kinds = Object.keys(sum.byKind).length > 1;
-  const body = `
-    ${it.subtype || it.note ? `<p class="hint item-sub">${it.subtype ? SUBTYPES[it.subtype] : ''}${it.subtype && it.note ? ' · ' : ''}${esc(it.note || '')}</p>` : ''}
-    ${sum.total ? heroCosts('Spesa prevista nei prossimi 12 mesi', sum.total) : ''}
-    <div class="group-title">Da pagare</div>
-    ${open.length ? `<div class="list">${open.map((d) => rowDeadline(d, { hideItem: true })).join('')}</div>`
-      : `<div class="card soft"><p class="hint" style="margin:0 0 12px">Nessuna scadenza. Premi “Scadenza” per aggiungere la prima${GUIDE[it.category === 'casa' ? 'casa_' + (it.subtype || 'affitto') : it.category] ? ', oppure compila le voci principali in un colpo solo.' : '.'}</p>
-        ${GUIDE[it.category === 'casa' ? 'casa_' + (it.subtype || 'affitto') : it.category] ? `<button class="btn secondary small" data-action="guided" data-id="${it.id}">Compila le voci principali</button>` : ''}</div>`}
-    ${sum.total ? barsCard(sum.months) : ''}
-    ${kinds ? `<div class="card"><h2>Dove vanno i soldi</h2>${breakdown(sum.byKind, (k) => { const kd = kindOf(k); return { icon: kd.icon, name: kd.label }; })}</div>` : ''}
-    ${paid.length ? `<div class="group-title">Pagate di recente</div><div class="list">${paid.map((d) => rowDeadline(d, { hideItem: true })).join('')}</div>` : ''}
-    ${sum.missing ? `<p class="hint">${sum.missing} ${sum.missing === 1 ? 'scadenza non ha' : 'scadenze non hanno'} un importo e non ${sum.missing === 1 ? 'è inclusa' : 'sono incluse'} nei conteggi.</p>` : ''}`;
-  return { title: it.name, body, fab: true, fabItem: it.id };
+    .sort((a, b) => (b.paid_on || '').localeCompare(a.paid_on || '')).slice(0, 6);
+  let body = identityCard(it, t) + (sum.total ? heroCosts('Spesa prevista nei prossimi 12 mesi', sum.total) : '');
+
+  if (t.groups) {
+    body += t.groups.map((g) => {
+      const ids = g.ids.filter((id) => !hidden.includes(id));
+      return ids.length ? `<div class="group-title">${esc(g.title)}</div><div class="scards">${ids.map((id) => sectionCard(it, id)).join('')}</div>` : '';
+    }).join('');
+    const nHidden = t.groups.flatMap((g) => g.ids).filter((id) => hidden.includes(id)).length;
+    if (nHidden) body += `<div class="center"><button class="link" data-action="show-hidden" data-id="${it.id}">Voci nascoste (${nHidden})</button></div>`;
+    const extra = state.deadlines.filter((d) => d.item_id === it.id && !d.paid && !d.section);
+    if (extra.length) body += `<div class="group-title">Altre scadenze</div><div class="list">${extra.map((d) => rowDeadline(d, { hideItem: true })).join('')}</div>`;
+  } else {
+    const open = state.deadlines.filter((d) => d.item_id === it.id && !d.paid);
+    body += `<div class="group-title">Da pagare</div>` + (open.length
+      ? `<div class="list">${open.map((d) => rowDeadline(d, { hideItem: true })).join('')}</div>`
+      : `<div class="card soft"><p class="hint" style="margin:0">Ancora nessuna scadenza.</p></div>`);
+    body += `<div class="actions"><button class="btn" data-action="new-deadline" data-item="${it.id}">${ic('plus')}${esc(t.addLabel || 'Aggiungi una scadenza')}</button></div>`;
+    if (sum.total) body += barsCard(sum.months);
+  }
+  if (t.log) body += logsCard(it, t);
+  if (paid.length) body += `<div class="group-title">Pagate di recente</div><div class="list">${paid.map((d) => rowDeadline(d, { hideItem: true })).join('')}</div>`;
+  if (sum.missing && t.groups) body += `<p class="hint">${sum.missing} ${sum.missing === 1 ? 'scadenza non ha' : 'scadenze non hanno'} un importo e non ${sum.missing === 1 ? 'è inclusa' : 'sono incluse'} nei conteggi.</p>`;
+  return { title: it.name, body, fab: !!t.groups, fabItem: it.id };
 }
 
 /* ---------- finestre dal basso (sheet) ---------- */
@@ -532,8 +663,8 @@ let sheetOpen = false;
 
 function openSheet(title, body, opts = {}) {
   sheetRoot.innerHTML = `
-    <div class="overlay" data-action="close-sheet"></div>
-    <div class="sheet" role="dialog" aria-modal="true" aria-label="${esc(title)}">
+    <div class="overlay ${opts.noAnim ? 'noanim' : ''}" data-action="close-sheet"></div>
+    <div class="sheet ${opts.noAnim ? 'noanim' : ''}" role="dialog" aria-modal="true" aria-label="${esc(title)}">
       <div class="grab"></div>
       ${title ? `<div class="head"><h2>${esc(title)}</h2></div>` : ''}
       ${body}
@@ -545,6 +676,7 @@ function openSheet(title, body, opts = {}) {
 
 function closeSheetNow() { sheetRoot.innerHTML = ''; document.body.style.overflow = ''; sheetOpen = false; }
 function closeSheet() {
+  seq = null;   // chiudere a mano interrompe il percorso guidato
   const sh = $('.sheet', sheetRoot), ov = $('.overlay', sheetRoot);
   if (!sh) { closeSheetNow(); return; }
   sh.style.transition = 'transform .2s ease-in'; sh.style.transform = 'translateY(100%)';
@@ -576,6 +708,7 @@ function enableSwipe(sheet) {
     dragging = false;
     const v = dy / Math.max(1, Date.now() - t0);
     if (dy > 110 || (v > 0.6 && dy > 40)) {
+      seq = null;
       sheet.style.transition = 'transform .18s ease-in'; sheet.style.transform = 'translateY(100%)';
       const ov = $('.overlay', sheetRoot); if (ov) { ov.style.transition = 'opacity .18s'; ov.style.opacity = '0'; }
       setTimeout(closeSheetNow, 170);
@@ -764,109 +897,317 @@ function applyPaste(form) {
   if (found.length) { const d = $('details.more'); if (d) d.open = false; }
 }
 
-/* --- form elemento --- */
+/* --- campi generici (da schede.js) --- */
+function fieldHTML(f, val) {
+  const v = val ?? '';
+  const hint = f.hint ? `<span class="fh">${esc(f.hint)}</span>` : '';
+  let input;
+  if (f.t === 'select') {
+    input = `<select name="${f.k}">${f.def === undefined && v === '' ? '<option value="">—</option>' : ''}${f.opts.map(([o, l]) => `<option value="${o}" ${String(v) === o ? 'selected' : ''}>${esc(l)}</option>`).join('')}</select>`;
+  } else if (f.t === 'date') input = `<input type="date" name="${f.k}" value="${esc(v)}">`;
+  else if (f.t === 'money') input = `<input type="number" name="${f.k}" step="0.01" min="0" inputmode="decimal" placeholder="se lo sai" value="${esc(v)}">`;
+  else if (f.t === 'number') input = `<input type="number" name="${f.k}" step="1" min="0" inputmode="numeric" value="${esc(v)}">`;
+  else input = `<input name="${f.k}" value="${esc(v)}" placeholder="${esc(f.ph || '')}" autocomplete="off" ${f.upper ? 'autocapitalize="characters" style="text-transform:uppercase"' : ''}>`;
+  return `<label>${esc(f.l)}${input}${hint}</label>`;
+}
+function fieldsHTML(fields, values = {}) {
+  let out = '', i = 0;
+  while (i < fields.length) {
+    const f = fields[i], g = fields[i + 1];
+    if (f.half && g?.half) { out += `<div class="row2">${fieldHTML(f, values[f.k])}${fieldHTML(g, values[g.k])}</div>`; i += 2; }
+    else { out += fieldHTML(f, values[f.k]); i++; }
+  }
+  return out;
+}
+function readFields(form, fields) {
+  const v = {};
+  for (const f of fields) {
+    const el = form.elements[f.k]; if (!el) continue;
+    let x = String(el.value).trim();
+    if (f.upper) x = x.toUpperCase();
+    if (x === '') continue;
+    v[f.k] = (f.t === 'money' || f.t === 'number') ? Number(x) : x;
+  }
+  return v;
+}
+
+/* --- form elemento (casa / mezzo / altro): scelta del tipo, nome e pochi dati --- */
+const TYPE_Q = { mezzi: 'Che mezzo è?', casa: "Com'è la casa?", altro: 'Che cosa vuoi tenere sotto controllo?' };
+const typeTiles = (types, sel) => types.map((t) =>
+  `<button type="button" class="kind ${t.id === sel ? 'sel' : ''}" data-action="pick-type" data-type="${t.id}">${ic(t.icon)}<span>${esc(t.label)}</span></button>`).join('');
+
+function itemFieldsHTML(t, cur = {}) {
+  const createFields = (t.ident || []).filter((f) => (t.create || []).includes(f.k));
+  return `
+    <label>${esc(t.nameLabel || 'Nome')}<input name="name" required value="${esc(cur.name ?? t.defName ?? '')}" placeholder="${esc(t.ph || '')}" autocomplete="off"></label>
+    ${!cur.exists && t.sugg?.length ? `<div class="sugg">${t.sugg.map((x) => `<button type="button" class="chip" data-action="sugg" data-v="${esc(x)}">${esc(x)}</button>`).join('')}</div>` : ''}
+    ${fieldsHTML(createFields, cur.ident || {})}`;
+}
+
 function openItemForm(id, cat) {
   const it = id ? byId(state.items, id) : null;
   const category = it?.category || cat || 'casa';
-  const c = CATS[category];
-  const sub = it?.subtype || (category === 'casa' ? 'affitto' : '');
-  openSheet(it ? 'Modifica' : c.add, `
-    <form id="item-form" data-id="${it?.id || ''}" data-cat="${category}">
-      <label>Nome<input name="name" required value="${esc(it?.name || '')}" placeholder="${esc(c.ph)}" autocomplete="off"></label>
-      ${it ? '' : `<div class="sugg">${c.sugg.map((s) => `<button type="button" class="chip" data-action="sugg" data-v="${esc(s)}">${esc(s)}</button>`).join('')}</div>`}
-      ${category === 'casa' ? `
-      <div class="flabel">Com'è la casa?</div>
-      <div class="seg two">
-        <input type="radio" name="subtype" id="st-a" value="affitto" ${sub === 'affitto' ? 'checked' : ''}><label for="st-a">In affitto</label>
-        <input type="radio" name="subtype" id="st-p" value="proprieta" ${sub === 'proprieta' ? 'checked' : ''}><label for="st-p">Di proprietà</label>
-      </div>` : ''}
-      <label>Note (facoltativo)<input name="note" value="${esc(it?.note || '')}" placeholder="Targa, indirizzo…" autocomplete="off"></label>
-      <div class="actions"><button class="btn" type="submit">Salva</button></div>
+  const types = TYPES[category];
+  const cur = it ? itemType(it) : types[0];
+  openSheet(it ? 'Modifica' : CATS[category].add, `
+    <form id="item-form" data-id="${it?.id || ''}" data-cat="${category}" data-type="${cur.id}">
+      ${types.length > 1 ? `<div class="flabel">${TYPE_Q[category]}</div><div class="kinds ${types.length > 4 ? 'kinds-many' : 'kinds-2'}" id="type-grid">${typeTiles(types, cur.id)}</div>` : ''}
+      <div id="item-fields">${itemFieldsHTML(cur, { name: it?.name, ident: it?.details?.ident, exists: !!it })}</div>
+      <div class="actions"><button class="btn" type="submit">${it ? 'Salva' : 'Continua'}</button></div>
     </form>`);
-  if (!it) setTimeout(() => $('#item-form').elements.name.focus({ preventScroll: true }), 60);
+  if (!it) setTimeout(() => { const n = $('#item-form')?.elements.name; if (n && !n.value) n.focus({ preventScroll: true }); }, 60);
+}
+
+function setItemType(form, typeId) {
+  const types = TYPES[form.dataset.cat];
+  const prev = types.find((x) => x.id === form.dataset.type), t = types.find((x) => x.id === typeId);
+  if (!t || t === prev) return;
+  const name = form.elements.name.value.trim();
+  const keep = name && name !== (prev?.defName || '');
+  const identAll = readFields(form, [...(prev?.ident || []), ...(t.ident || [])]);
+  form.dataset.type = t.id;
+  form.querySelectorAll('#type-grid .kind').forEach((b) => b.classList.toggle('sel', b.dataset.type === t.id));
+  $('#item-fields').innerHTML = itemFieldsHTML(t, { name: keep ? name : undefined, ident: identAll, exists: !!form.dataset.id });
 }
 
 async function onItemSubmit(form) {
   const f = form.elements; const id = form.dataset.id || null; const category = form.dataset.cat;
-  const fields = { name: f.name.value.trim(), note: f.note.value.trim() || null };
+  const t = TYPES[category].find((x) => x.id === form.dataset.type) || TYPES[category][0];
+  const existing = id ? byId(state.items, id) : null;
+  const createFields = (t.ident || []).filter((x) => (t.create || []).includes(x.k));
+  const vals = readFields(form, createFields);
+  const ident = { ...(existing?.details?.ident || {}) };
+  createFields.forEach((x) => { if (vals[x.k] !== undefined) ident[x.k] = vals[x.k]; else delete ident[x.k]; });
+  const fields = { name: f.name.value.trim(), subtype: t.id, details: { ...(existing?.details || {}), ident } };
   if (!id) fields.category = category;
-  if (category === 'casa') fields.subtype = f.subtype?.value || null;
   const r = await saveItem(id, fields);
   if (!r) return;
   closeSheetNow();
   if (!id) {
     state.tab = r.category; state.itemId = r.id; state.anim = 'push'; render(); window.scrollTo(0, 0);
-    openGuided(r.id);
+    startSequence(r.id);
   } else { render(); toast('Salvato'); }
 }
 
-/* --- inserimento guidato: le voci principali in un'unica schermata --- */
-// Voci proposte per tipo. Le altre si aggiungono dopo con il pulsante "Scadenza".
-const GUIDE = {
-  casa_affitto: ['affitto', 'luce', 'gas', 'internet'],
-  casa_proprieta: ['luce', 'gas', 'internet', 'imu', 'rifiuti'],
-  mezzi: ['assicurazione', 'bollo', 'revisione', 'tagliando'],
-};
-// Per queste la persona ricorda "quando l'ho fatto l'ultima volta": la prossima la calcoliamo noi.
-const LAST_KINDS = new Set(['revisione', 'tagliando', 'caldaia', 'gomme']);
-
-function openGuided(itemId) {
-  const item = byId(state.items, itemId);
-  if (!item) return;
-  const ids = GUIDE[item.category === 'casa' ? 'casa_' + (item.subtype || 'affitto') : item.category];
-  if (!ids) { openDeadlineForm(null, itemId); return; }
-  const rows = ids.map((id) => {
-    const k = kindOf(id); const last = LAST_KINDS.has(id); const m = REC[k.rec].m;
-    const every = m === 12 ? 'ogni anno' : m === 24 ? 'ogni 2 anni' : '';
-    return `
-    <div class="gk">
-      <div class="gk-h">${tile(k.icon, item.category)}
-        <div><div class="t">${k.label}</div>
-        <div class="hint">${last ? `Quando l'hai fatto l'ultima volta?${every ? ` Poi il promemoria sarà ${every}.` : ''}` : 'Quando scade o quando è il prossimo pagamento?'}</div></div></div>
-      <div class="row2">
-        <label>${last ? 'Fatto il' : 'Scadenza'}<input type="date" name="d_${id}"></label>
-        <label>Importo (€)<input type="number" name="a_${id}" step="0.01" min="0" inputmode="decimal" placeholder="se lo sai"></label>
-      </div>
-    </div>`;
-  }).join('');
-  openSheet('Cosa vuoi tenere sotto controllo?', `
-    <p class="hint" style="margin:-4px 0 14px">Compila solo quello che sai. Le voci vuote vengono ignorate e il resto lo aggiungi quando vuoi.</p>
-    <form id="guided-form" data-item="${itemId}">
-      ${rows}
+/* --- dati dell'elemento (targa, date di acquisto, indirizzo…) --- */
+function openIdentity(itemId, opts = {}) {
+  const it = byId(state.items, itemId); if (!it) return;
+  const t = itemType(it);
+  const fields = (t.ident || []).filter((f) => !(opts.seq && (t.create || []).includes(f.k)));
+  const title = it.category === 'mezzi' ? 'Dati del mezzo' : it.category === 'casa' ? 'Dati della casa' : 'Dati';
+  openSheet(title, `
+    <form id="ident-form" data-item="${it.id}" ${opts.seq ? 'data-seq="1"' : ''}>
+      ${opts.seq ? `<p class="hint step">Passo 1 di ${opts.seq.ids.length}</p>` : `<label>Nome<input name="__name" required value="${esc(it.name)}" autocomplete="off"></label>`}
+      ${fieldsHTML(fields, it.details?.ident || {})}
+      ${opts.seq ? '' : `<label>Note<textarea name="__note" rows="2" placeholder="Qualsiasi cosa utile">${esc(it.note || '')}</textarea></label>`}
       <div class="actions">
-        <button class="btn" type="submit">Salva</button>
-        <button type="button" class="btn secondary" data-action="close-sheet">Lo faccio dopo</button>
+        <button class="btn" type="submit">${opts.seq ? 'Salva e continua' : 'Salva'}</button>
+        ${opts.seq ? '<button type="button" class="btn secondary" data-action="seq-skip">Salta</button>' : ''}
       </div>
-    </form>`);
+    </form>`, { noAnim: !!opts.noAnim });
 }
 
-async function onGuidedSubmit(form) {
-  const itemId = form.dataset.item; const f = form.elements;
-  const ids = (GUIDE[(() => { const it = byId(state.items, itemId); return it.category === 'casa' ? 'casa_' + (it.subtype || 'affitto') : it.category; })()]) || [];
-  let n = 0;
-  for (const id of ids) {
-    const date = f['d_' + id].value;
-    if (!date) continue;
-    const k = kindOf(id);
-    const due = LAST_KINDS.has(id) && REC[k.rec].m ? addMonths(date, REC[k.rec].m) : date;
-    const a = f['a_' + id].value;
-    const ok = await saveDeadline(null, {
-      item_id: itemId, kind: id, title: k.label, due_date: due, amount: a === '' ? null : Number(a),
-      recurrence: k.rec, note: null, paid: false,
-    });
-    if (!ok) return;
-    n++;
+async function onIdentSubmit(form) {
+  const it = byId(state.items, form.dataset.item); if (!it) return false;
+  const t = itemType(it);
+  const seqMode = !!form.dataset.seq;
+  const fields = (t.ident || []).filter((f) => !(seqMode && (t.create || []).includes(f.k)));
+  const vals = readFields(form, fields);
+  const ident = { ...(it.details?.ident || {}) };
+  fields.forEach((f) => { if (vals[f.k] !== undefined) ident[f.k] = vals[f.k]; else delete ident[f.k]; });
+  const patch = { details: { ...(it.details || {}), ident } };
+  if (!seqMode) { patch.name = form.elements.__name.value.trim() || it.name; patch.note = form.elements.__note.value.trim() || null; }
+  return !!(await saveItem(it.id, patch));
+}
+
+/* --- schede (assicurazione, bollo, revisione, bollette…) --- */
+const secTouched = {};
+function monthsBetween(a, b) { const x = fromISO(a), y = fromISO(b); return (y.getFullYear() - x.getFullYear()) * 12 + (y.getMonth() - x.getMonth()); }
+
+function sectionValues(it, sid) {
+  const S = SECTIONS[sid];
+  const saved = { ...((it.details?.s || {})[sid] || {}) };
+  const dl = openDl(it.id, sid);
+  if (dl) {
+    for (const f of S.fields) {
+      if (f.dl === 'date') saved[f.k] = dl.due_date;
+      if (f.dl === 'amount') saved[f.k] = dl.amount ?? '';
+      if (f.dl === 'rec') saved[f.k] = dl.recurrence;
+    }
+    if (S.untilFrom && dl.until) saved[S.untilFrom] = monthsBetween(dl.due_date, dl.until) + 1;   // rate che restano davvero
   }
-  closeSheetNow(); render();
-  toast(n ? (n === 1 ? 'Aggiunta 1 scadenza' : `Aggiunte ${n} scadenze`) : 'Fatto. Aggiungerai le scadenze quando vuoi');
+  for (const f of S.fields) if (saved[f.k] === undefined && f.def !== undefined) saved[f.k] = f.def;
+  return saved;
+}
+
+function openSection(itemId, sid, opts = {}) {
+  const it = byId(state.items, itemId); const S = SECTIONS[sid];
+  if (!it || !S) return;
+  const saved = sectionValues(it, sid);
+  const ident = it.details?.ident || {};
+  Object.keys(secTouched).forEach((k) => delete secTouched[k]);
+  for (const f of S.fields) if (f.auto) {
+    secTouched[f.k] = saved[f.k] !== undefined && saved[f.k] !== '';
+    if (!secTouched[f.k]) { const a = SCHEDE.computeAuto(f, saved, ident, todayISO()); if (a) saved[f.k] = a; }
+  }
+  const gateField = S.gate ? S.fields.find((f) => f.k === S.gate.k) : null;
+  const rest = S.fields.filter((f) => f !== gateField);
+  const gateOff = !!(S.gate && saved[S.gate.k] === S.gate.off);
+  const hasData = !!openDl(it.id, sid) || Object.keys((it.details?.s || {})[sid] || {}).length > 0;
+  const last = opts.seq && opts.seq.i === opts.seq.ids.length - 1;
+  openSheet(S.title, `
+    <form id="sec-form" data-item="${it.id}" data-sec="${sid}">
+      ${opts.seq ? `<p class="hint step">Passo ${opts.seq.i + 1} di ${opts.seq.ids.length}</p>` : ''}
+      ${S.intro ? `<div class="intro">${ic('info')}<span>${esc(S.intro)}</span></div>` : ''}
+      ${gateField ? fieldHTML(gateField, saved[gateField.k]) : ''}
+      <div id="gated" ${gateOff ? 'hidden' : ''}>${fieldsHTML(rest, saved)}</div>
+      <div class="actions">
+        <button class="btn" type="submit">${opts.seq ? (last ? 'Salva e finisci' : 'Salva e continua') : 'Salva'}</button>
+        ${opts.seq ? '<button type="button" class="btn secondary" data-action="seq-skip">Salta</button>'
+          : `<button type="button" class="btn danger" data-action="hide-section" data-item="${it.id}" data-sec="${sid}">${ic('trash')}${hasData ? 'Cancella e nascondi' : 'Non mi serve, nascondi'}</button>`}
+      </div>
+    </form>`, { noAnim: !!opts.noAnim });
+}
+
+// Quando si cambia un campo, ricalcolo quelli "calcolati" (a meno che la persona non li abbia già modificati a mano).
+function onSecFormInput(e) {
+  const form = e.target.closest?.('#sec-form'); if (!form) return;
+  const it = byId(state.items, form.dataset.item); const S = SECTIONS[form.dataset.sec];
+  if (!it || !S) return;
+  const name = e.target.name;
+  if (S.gate && name === S.gate.k) { $('#gated').hidden = e.target.value === S.gate.off; return; }
+  const f = S.fields.find((x) => x.k === name);
+  if (f?.auto && e.type === 'input') { secTouched[f.k] = true; return; }
+  const vals = readFields(form, S.fields);
+  for (const g of S.fields) if (g.auto && !secTouched[g.k]) {
+    const a = SCHEDE.computeAuto(g, vals, it.details?.ident || {}, todayISO());
+    if (a && form.elements[g.k]) form.elements[g.k].value = a;
+  }
+}
+
+async function onSectionSubmit(form) {
+  const it = byId(state.items, form.dataset.item); const sid = form.dataset.sec; const S = SECTIONS[sid];
+  if (!it || !S) return false;
+  const vals = readFields(form, S.fields);
+  const gateOff = !!(S.gate && vals[S.gate.k] === S.gate.off);
+  const dF = S.fields.find((f) => f.dl === 'date'), aF = S.fields.find((f) => f.dl === 'amount'), rF = S.fields.find((f) => f.dl === 'rec');
+  const date = !gateOff && dF ? vals[dF.k] : null;
+  const amount = !gateOff && aF && vals[aF.k] !== undefined ? vals[aF.k] : null;
+  const rec = (rF && vals[rF.k]) || S.rec;
+  const residue = S.untilFrom ? vals[S.untilFrom] : undefined;
+  const finished = residue === 0;
+  const until = S.untilFrom && date ? SCHEDE.untilFor(date, residue) : null;
+
+  const details = { ...(it.details || {}), s: { ...(it.details?.s || {}), [sid]: vals } };
+  if (details.hidden) details.hidden = details.hidden.filter((x) => x !== sid);
+  if (!(await saveItem(it.id, { details }))) return false;
+
+  const open = openDl(it.id, sid);
+  if (!date || finished) { if (open && !(await deleteDeadline(open.id))) return false; }
+  else {
+    const fields = { item_id: it.id, section: sid, kind: S.kind, title: S.title, due_date: date, amount, recurrence: rec, until, note: null };
+    if (!(await saveDeadline(open ? open.id : null, open ? fields : { ...fields, paid: false }))) return false;
+  }
+  return true;
+}
+
+async function hideSection(itemId, sid) {
+  const it = byId(state.items, itemId); const S = SECTIONS[sid]; if (!it || !S) return;
+  const hasData = !!openDl(itemId, sid) || Object.keys((it.details?.s || {})[sid] || {}).length > 0;
+  if (hasData && !(await confirmDialog({ title: `Nascondere “${S.title}”?`, text: 'Il promemoria e i dati inseriti per questa voce verranno cancellati.', ok: 'Nascondi', danger: true }))) return;
+  const open = openDl(itemId, sid);
+  if (open && !(await deleteDeadline(open.id))) return;
+  const s = { ...(it.details?.s || {}) }; delete s[sid];
+  const hidden = [...new Set([...(it.details?.hidden || []), sid])];
+  if (await saveItem(itemId, { details: { ...(it.details || {}), s, hidden } })) { closeSheetNow(); render(); toast('Voce nascosta. La ritrovi in “Voci nascoste”'); }
+}
+
+function openHidden(itemId) {
+  const it = byId(state.items, itemId); if (!it) return;
+  const hidden = it.details?.hidden || [];
+  if (!hidden.length) { closeSheetNow(); render(); return; }
+  openSheet('Voci nascoste', `
+    <div class="list">${hidden.filter((id) => SECTIONS[id]).map((id) => `
+      <button class="row" data-action="unhide-section" data-item="${itemId}" data-sec="${id}">
+        ${tile(SECTIONS[id].icon, it.category)}<div class="main"><div class="t">${esc(SECTIONS[id].title)}</div><div class="s">Tocca per mostrarla di nuovo</div></div>
+        <span class="chev">${ic('plus')}</span>
+      </button>`).join('')}</div>`);
+}
+
+/* --- percorso guidato dopo la creazione: una voce alla volta, si può saltare --- */
+let seq = null;
+function startSequence(itemId) {
+  const it = byId(state.items, itemId); if (!it) return;
+  const t = itemType(it);
+  const ids = [...(t.seqIdent ? ['__ident'] : []), ...(t.core || [])];
+  if (!ids.length) return;
+  seq = { itemId, ids, i: 0 };
+  runSeqStep(false);
+}
+function runSeqStep(instant) {
+  if (!seq) return;
+  if (seq.i >= seq.ids.length) { seq = null; closeSheetNow(); render(); toast('Fatto. Le altre voci le trovi nella scheda'); return; }
+  const id = seq.ids[seq.i];
+  if (instant) { closeSheetNow(); render(); }
+  if (id === '__ident') openIdentity(seq.itemId, { seq, noAnim: instant });
+  else openSection(seq.itemId, id, { seq, noAnim: instant });
+}
+function advanceSeq() { if (!seq) return; seq.i++; runSeqStep(true); }
+
+/* --- lavori e ricambi --- */
+function openLogForm(itemId, logId) {
+  const it = byId(state.items, itemId); if (!it) return;
+  const t = itemType(it); if (!t.log) return;
+  const lg = logId ? byId(state.logs, logId) : null;
+  const vehicle = !!t.log.hasKm;
+  const kind = lg?.kind || 'lavoro';
+  openSheet(lg ? 'Modifica' : t.log.add, `
+    <form id="log-form" data-item="${it.id}" data-id="${lg?.id || ''}">
+      ${vehicle ? `<div class="seg two">
+        <input type="radio" name="kind" id="lk-l" value="lavoro" ${kind === 'lavoro' ? 'checked' : ''}><label for="lk-l">Lavoro fatto</label>
+        <input type="radio" name="kind" id="lk-r" value="ricambio" ${kind === 'ricambio' ? 'checked' : ''}><label for="lk-r">Pezzo sostituito</label>
+      </div>` : ''}
+      <label>Che cosa?<input name="title" required value="${esc(lg?.title || '')}" placeholder="es. ${esc(t.log.sugg[0])}" autocomplete="off"></label>
+      ${lg ? '' : `<div class="sugg">${t.log.sugg.map((x) => `<button type="button" class="chip" data-action="log-sugg" data-v="${esc(x)}">${esc(x)}</button>`).join('')}</div>`}
+      <div class="row2">
+        <label>Data<input type="date" name="done_on" required value="${lg?.done_on || todayISO()}"></label>
+        ${vehicle ? `<label>Chilometri<input type="number" name="km" min="0" step="1" inputmode="numeric" value="${lg?.km ?? ''}" placeholder="facoltativo"></label>`
+          : `<label>Costo (€)<input type="number" name="amount" min="0" step="0.01" inputmode="decimal" value="${lg?.amount ?? ''}" placeholder="se lo sai"></label>`}
+      </div>
+      <div class="row2">
+        ${vehicle ? `<label>Costo (€)<input type="number" name="amount" min="0" step="0.01" inputmode="decimal" value="${lg?.amount ?? ''}" placeholder="se lo sai"></label>` : ''}
+        <label>${vehicle ? 'Officina' : 'Ditta o persona'}<input name="place" value="${esc(lg?.place || '')}" autocomplete="off"></label>
+      </div>
+      <label>Note<textarea name="note" rows="2">${esc(lg?.note || '')}</textarea></label>
+      <div class="actions">
+        <button class="btn" type="submit">Salva</button>
+        ${lg ? `<button type="button" class="btn danger" data-action="delete-log" data-id="${lg.id}">${ic('trash')}Elimina</button>` : ''}
+      </div>
+    </form>`);
+  if (!lg) setTimeout(() => $('#log-form')?.elements.title.focus({ preventScroll: true }), 60);
+}
+
+async function onLogSubmit(form) {
+  const f = form.elements; const it = byId(state.items, form.dataset.item); const id = form.dataset.id || null;
+  const km = f.km && f.km.value !== '' ? Math.round(Number(f.km.value)) : null;
+  const fields = {
+    item_id: it.id, kind: f.kind ? f.kind.value : 'lavoro', title: f.title.value.trim(), done_on: f.done_on.value,
+    km, amount: f.amount.value === '' ? null : Number(f.amount.value), place: f.place.value.trim() || null, note: f.note.value.trim() || null,
+  };
+  if (!(await saveLog(id, fields))) return;
+  // i chilometri attuali del mezzo seguono l'ultimo lavoro registrato
+  if (km && km > (it.details?.ident?.km || 0)) await saveItem(it.id, { details: { ...(it.details || {}), ident: { ...(it.details?.ident || {}), km } } });
+  closeSheetNow(); render(); toast(id ? 'Salvato' : 'Aggiunto');
 }
 
 function openItemMenu(id) {
   const it = byId(state.items, id);
   if (!it) return;
+  const t = itemType(it);
   openSheet(it.name, `
     <div class="menu">
-      <button data-action="edit-item" data-id="${id}">${ic('pencil')}<span>Modifica nome e dettagli</span></button>
+      <button data-action="edit-item" data-id="${id}">${ic('pencil')}<span>Cambia nome o tipo</span></button>
+      ${t.ident?.length ? `<button data-action="edit-ident" data-id="${id}">${ic('file')}<span>Modifica i dati${it.category === 'mezzi' ? ' (targa, date…)' : ''}</span></button>` : ''}
       <button class="danger" data-action="delete-item" data-id="${id}">${ic('trash')}<span>Elimina${it.category === 'casa' ? ' questa casa' : it.category === 'mezzi' ? ' questo mezzo' : ''}</span></button>
     </div>`);
 }
@@ -937,7 +1278,7 @@ async function importJSON(file) {
     if (!Array.isArray(data.items) || !Array.isArray(data.deadlines)) throw new Error('formato');
     const map = {};
     for (const it of data.items) {
-      const r = normItem(await store.insert('items', { category: it.category === 'auto' ? 'mezzi' : it.category, subtype: it.subtype || null, name: it.name, note: it.note || null }));
+      const r = normItem(await store.insert('items', { category: it.category === 'auto' ? 'mezzi' : it.category, subtype: it.subtype || null, name: it.name, note: it.note || null, details: it.details || {} }));
       map[it.id] = r.id; state.items.push(r);
     }
     for (const d of data.deadlines) {
@@ -945,6 +1286,14 @@ async function importJSON(file) {
       state.deadlines.push(await store.insert('deadlines', {
         item_id: map[d.item_id], kind: d.kind, title: d.title, due_date: d.due_date, amount: d.amount ?? null,
         recurrence: d.recurrence || 'none', paid: !!d.paid, paid_on: d.paid_on || null, note: d.note || null,
+        section: d.section || null, until: d.until || null,
+      }));
+    }
+    for (const l of (data.item_logs || [])) {
+      if (!map[l.item_id]) continue;
+      state.logs.push(await store.insert('item_logs', {
+        item_id: map[l.item_id], kind: l.kind || 'lavoro', title: l.title, done_on: l.done_on, km: l.km ?? null,
+        amount: l.amount ?? null, place: l.place || null, note: l.note || null,
       }));
     }
     sortDeadlines(); closeSheetNow(); render();
@@ -1085,13 +1434,42 @@ document.addEventListener('click', async (e) => {
     case 'open-item': { const it = byId(state.items, id); if (it) { state.tab = it.category; state.itemId = id; state.anim = 'push'; render(); window.scrollTo(0, 0); } break; }
     case 'back': state.itemId = null; state.anim = 'pop'; render(); window.scrollTo(0, 0); break;
     case 'new-deadline': openDeadlineForm(null, el.dataset.item); break;
-    case 'edit-deadline': openDeadlineForm(id); break;
+    case 'edit-deadline': {
+      const dl = byId(state.deadlines, id); const it = dl && byId(state.items, dl.item_id);
+      if (dl && it && dl.section && !dl.paid && SECTIONS[dl.section]) openSection(it.id, dl.section); else openDeadlineForm(id);
+      break;
+    }
+    case 'open-section': openSection(el.dataset.item, el.dataset.sec); break;
+    case 'edit-ident': openIdentity(id); break;
+    case 'pick-type': setItemType($('#item-form'), el.dataset.type); break;
+    case 'seq-skip': advanceSeq(); break;
+    case 'hide-section': hideSection(el.dataset.item, el.dataset.sec); break;
+    case 'show-hidden': openHidden(id); break;
+    case 'unhide-section': {
+      const it = byId(state.items, el.dataset.item);
+      if (it && await saveItem(it.id, { details: { ...(it.details || {}), hidden: (it.details?.hidden || []).filter((x) => x !== el.dataset.sec) } })) { render(); openHidden(it.id); }
+      break;
+    }
+    case 'new-log': openLogForm(id); break;
+    case 'edit-log': { const lg = byId(state.logs, id); if (lg) openLogForm(lg.item_id, id); break; }
+    case 'log-sugg': { const f = $('#log-form'); if (f) { f.elements.title.value = el.dataset.v; f.elements.title.focus(); } break; }
+    case 'delete-log': {
+      const lg = byId(state.logs, id);
+      if (await confirmDialog({ title: 'Eliminare questa voce?', text: lg ? `“${lg.title}” verrà rimossa dallo storico.` : '', ok: 'Elimina', danger: true })) {
+        if (await deleteLog(id)) { closeSheetNow(); render(); toast('Eliminata'); }
+      }
+      break;
+    }
     case 'pick-kind': applyKind($('#dl-form'), el.dataset.kind); break;
     case 'new-item': openItemForm(null, el.dataset.cat); break;
-    case 'guided': openGuided(id); break;
     case 'edit-item': openItemForm(id, byId(state.items, id)?.category); break;
     case 'item-menu': openItemMenu(id); break;
-    case 'sugg': { const f = $('#item-form'); f.elements.name.value = el.dataset.v; if (/affitto/i.test(el.dataset.v) && f.elements.subtype) f.elements.subtype.value = 'affitto'; if (/propriet/i.test(el.dataset.v) && f.elements.subtype) f.elements.subtype.value = 'proprieta'; break; }
+    case 'sugg': {
+      const f = $('#item-form');
+      if (f.dataset.cat === 'casa') setItemType(f, /propriet|seconda/i.test(el.dataset.v) ? 'proprieta' : /affitto/i.test(el.dataset.v) ? 'affitto' : f.dataset.type);
+      f.elements.name.value = el.dataset.v;
+      break;
+    }
     case 'settings': openSettings(); break;
     case 'close-sheet': closeSheet(); break;
     case 'parse-paste': applyPaste($('#dl-form')); break;
@@ -1113,7 +1491,7 @@ document.addEventListener('click', async (e) => {
       break;
     }
     case 'export-ics': exportICS(); break;
-    case 'export-json': download('scadenziario-backup.json', 'application/json', JSON.stringify({ items: state.items, deadlines: state.deadlines }, null, 2)); break;
+    case 'export-json': download('scadenziario-backup.json', 'application/json', JSON.stringify({ items: state.items, deadlines: state.deadlines, item_logs: state.logs }, null, 2)); break;
     case 'copy-code': try { await navigator.clipboard.writeText(state.household.invite_code); toast('Codice copiato'); } catch { toast('Copia non riuscita: scrivilo a mano'); } break;
     case 'share-code':
       if (navigator.share) { try { await navigator.share({ title: 'Scadenziario', text: inviteText() }); } catch {} }
@@ -1129,7 +1507,7 @@ document.addEventListener('click', async (e) => {
     case 'forgot': doForgot(); break;
     case 'logout':
       if (sb) await sb.auth.signOut();
-      closeSheetNow(); state.user = null; state.hid = null; state.household = null; state.items = []; state.deadlines = []; state.tab = 'home'; state.itemId = null; render();
+      closeSheetNow(); state.user = null; state.hid = null; state.household = null; state.items = []; state.deadlines = []; state.logs = []; state.tab = 'home'; state.itemId = null; render();
       break;
   }
 });
@@ -1139,8 +1517,10 @@ document.addEventListener('keydown', (e) => {
   if ((e.key === 'Enter' || e.key === ' ') && e.target.matches?.('.row[role="button"]')) { e.preventDefault(); e.target.click(); }
 });
 
+document.addEventListener('input', onSecFormInput);
 document.addEventListener('change', (e) => {
   onDeadlineFormChange(e);
+  onSecFormInput(e);
   if (e.target.id === 'import-file' && e.target.files[0]) importJSON(e.target.files[0]);
 });
 
@@ -1153,7 +1533,9 @@ document.addEventListener('submit', async (e) => {
     switch (form.id) {
       case 'dl-form': await onDeadlineSubmit(form); break;
       case 'item-form': await onItemSubmit(form); break;
-      case 'guided-form': await onGuidedSubmit(form); break;
+      case 'sec-form': if (await onSectionSubmit(form)) { if (seq) advanceSeq(); else { closeSheetNow(); render(); toast('Salvato'); } } break;
+      case 'ident-form': if (await onIdentSubmit(form)) { if (seq && form.dataset.seq) advanceSeq(); else { closeSheetNow(); render(); toast('Salvato'); } } break;
+      case 'log-form': await onLogSubmit(form); break;
       case 'login-form': await doLogin(form); break;
       case 'create-hh-form': await onCreateHousehold(form); break;
       case 'join-hh-form': await onJoinHousehold(form); break;
@@ -1204,18 +1586,18 @@ async function loadData() {
   try {
     if (MODE === 'cloud') {
       await loadHousehold();
-      if (!state.hid) { state.items = []; state.deadlines = []; state.loadError = ''; state.offline = false; render(); return; }
+      if (!state.hid) { state.items = []; state.deadlines = []; state.logs = []; state.loadError = ''; state.offline = false; render(); return; }
     }
     const d = await store.load();
-    state.items = d.items.map(normItem); state.deadlines = d.deadlines; sortDeadlines();
+    state.items = d.items.map(normItem); state.deadlines = d.deadlines; state.logs = d.item_logs || []; sortDeadlines();
     state.loadError = ''; state.offline = false;
-    if (snapKey) { try { localStorage.setItem(snapKey, JSON.stringify({ items: state.items, deadlines: state.deadlines, hid: state.hid, household: state.household, members: state.members })); } catch {} }
+    if (snapKey) { try { localStorage.setItem(snapKey, JSON.stringify({ items: state.items, deadlines: state.deadlines, logs: state.logs, hid: state.hid, household: state.household, members: state.members })); } catch {} }
   } catch (e) {
     console.error(e);
     const snap = snapKey && localStorage.getItem(snapKey);
     if (snap) {
       const d = JSON.parse(snap);
-      state.items = d.items; state.deadlines = d.deadlines; state.hid = d.hid; state.household = d.household; state.members = d.members || 1; state.offline = true;
+      state.items = d.items; state.deadlines = d.deadlines; state.logs = d.logs || []; state.hid = d.hid; state.household = d.household; state.members = d.members || 1; state.offline = true;
     } else state.loadError = 'Non riesco a caricare i dati. Controlla la connessione.';
   }
   render();

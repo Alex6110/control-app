@@ -1,7 +1,19 @@
-# Scadenziario – guida (versione 2)
+# Scadenziario – guida (versione 3)
 
 PWA per tenere sotto controllo scadenze e costi di casa, mezzi e altro, condivisa tra più persone.
 File statici, nessun build. Costo: 0 € (Netlify + Supabase piano gratuito).
+
+## Novità della v3: schede specifiche per ogni categoria
+- **Mezzi**: scegli *Auto* o *Moto/scooter*. Dopo il nome (e la targa) un percorso guidato, saltabile, chiede una voce alla volta: dati del mezzo (immatricolazione, acquisto, km), assicurazione, bollo (o "esente"), revisione, tagliando, gomme, finanziamento. La prossima revisione si calcola da sola (4 anni dalla prima immatricolazione, poi ogni 2, a fine mese); il prossimo tagliando dall'ultimo.
+- **Casa**: *In affitto* (affitto, contratto, registro) o *Di proprietà* (mutuo, IMU con scadenze 16 giugno/16 dicembre, condominio); per entrambe luce, gas, acqua, internet, rifiuti, assicurazione, caldaia.
+- **Altro**: documenti (identità, patente, passaporto, tessera sanitaria), salute (visite, esami, vaccini, farmaci), animali, abbonamenti, garanzie, tasse e fisco, lavoro, scuola, banca e libero.
+- **Lavori e ricambi**: per mezzi e case, storico di cosa è stato fatto (cambio olio, pastiglie, idraulico…) con data, km, costo e officina.
+- Ogni voce può essere nascosta se non serve ("Voci nascoste" per riaverla). Mutuo e finanziamento smettono da soli di contare le rate dopo l'ultima.
+
+### Aggiornamento v3
+1. **Supabase → SQL Editor**: incolla di nuovo tutto `supabase-schema.sql` → Run (aggiunge solo colonne e la tabella `item_logs`; i dati restano).
+2. Carica su GitHub tutti i file **tranne `config.js`**, compreso il nuovo `schede.js`.
+3. `sw.js` ha già `VERSION = "v5"`: i telefoni si aggiornano da soli.
 
 ## Novità della v2
 - Navigazione **Home · Casa · Mezzi · Altro**, con più case e più mezzi.
