@@ -465,3 +465,21 @@ a.chip { text-decoration: none; display: inline-flex; align-items: center; }
   .pr-c10 { background: #e8f5c8 !important; color: #111; }
   .pr-c11 { background: #efe2d4 !important; color: #111; }
 }
+
+/* ---- v6: calendario unico per più persone ---- */
+.fam-grid { gap: 3px; }
+.fam-cell { position: relative; border-radius: 10px; background: var(--bg); color: var(--text); display: flex; flex-direction: column; gap: 2px; padding: 3px 2px 3px; min-width: 0; min-height: 66px; border: 1.5px solid transparent; }
+.fam-cell.out { opacity: .4; }
+.fam-cell.today { border-color: var(--accent, #2f6bff); }
+.fam-cell .d { font-size: 11px; font-weight: 600; color: var(--muted); line-height: 1; padding-left: 3px; }
+.fam-pill { display: block; text-align: center; font-size: 12px; font-weight: 800; line-height: 1; padding: 4px 0; border-radius: 6px; min-height: 17px; }
+.fam-pill[class*="sh-c"] { background: var(--shb); color: var(--shf); }
+.fam-pill.none { background: transparent; }
+@media print {
+  .pr-fam td { height: 17mm; padding: 2px 4px; }
+  .pr-fam .pr-line { display: flex; align-items: baseline; gap: 4px; padding: 1px 4px; margin-top: 2px; min-height: 5.5mm; margin-top: 1px; border-radius: 2px; }
+  .pr-fam .pr-line i { font-style: normal; font-size: 8pt; font-weight: 700; width: 4mm; }
+  .pr-fam .pr-line b { font-size: 13pt; display: inline; text-align: left; }
+  .pr-fam .pr-line small { font-size: 8pt; margin-left: auto; display: inline; }
+}
+@media print { .pr-legend { break-inside: avoid; } .pr-fam + .pr-legend { margin-top: 6px; } .pr-leg { white-space: nowrap; } }

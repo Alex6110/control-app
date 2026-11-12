@@ -121,7 +121,7 @@ const tile = (icon, cat) => `<div class="tile tint-${cat || 'altro'}">${ic(icon)
 
 /* ---------- stato ---------- */
 const state = {
-  tab: 'home', itemId: null, items: [], deadlines: [], logs: [], shifts: [], shiftMonth: '', paint: null,
+  tab: 'home', itemId: null, items: [], deadlines: [], logs: [], shifts: [], shiftMonth: '', paint: null, fam: false, famWho: null,
   user: null, hid: null, household: null, members: 1, role: 'owner', memberList: [], invites: null, inbox: [],
   ready: false, offline: !navigator.onLine, loadError: '', authMode: 'login', anim: '',
 };
@@ -407,9 +407,10 @@ function render() {
   const item = state.itemId ? byId(state.items, state.itemId) : null;
   if (state.itemId && !item) state.itemId = null;
 
-  if (!(item && itemType(item).shifts)) state.paint = null;
+  if (!(item && itemType(item).shifts) && !state.fam) state.paint = null;
   let page;
-  if (item) page = pageItem(item);
+  if (state.fam && !item) page = pageFamily();
+  else if (item) page = pageItem(item);
   else if (state.tab === 'home') page = pageHome();
   else page = pageSection(state.tab);
 
@@ -417,13 +418,13 @@ function render() {
     ? `<div class="banner">${ic('alert')}<span>Sei offline: vedi l'ultima copia dei dati. Potrai modificare appena torna la connessione.</span></div>`
     : (state.loadError ? `<div class="banner">${ic('alert')}<span>${esc(state.loadError)}</span></div>` : '');
 
-  const left = item ? `<button class="icon-btn" data-action="back" aria-label="Indietro">${ic('back')}</button>` : '';
+  const left = (item || state.fam) ? `<button class="icon-btn" data-action="back" aria-label="Indietro">${ic('back')}</button>` : '';
   const right = item && !readOnly()
     ? `<button class="icon-btn" data-action="item-menu" data-id="${item.id}" aria-label="Opzioni">${ic('dots')}</button>`
     : `<button class="icon-btn" data-action="settings" aria-label="Impostazioni">${ic('sliders')}</button>`;
 
   app.innerHTML = `
-    <header class="topbar"><div class="wrap bar ${item ? 'has-back' : ''}">
+    <header class="topbar"><div class="wrap bar ${(item || state.fam) ? 'has-back' : ''}">
       ${left}<h1>${esc(page.title)}</h1>${right}
     </div></header>
     <main class="wrap ${state.anim === 'push' ? 'page-in' : state.anim === 'pop' ? 'page-back' : ''}">${banner}${page.body}</main>
@@ -738,6 +739,85 @@ function printShifts(itemId) {
   setTimeout(() => window.print(), 80);
 }
 
+
+/* --- calendario unico: i turni di tutte le persone insieme --- */
+const famPeople = () => state.items.filter((i) => itemType(i).shifts);
+const famColor = (it) => { const l = famPeople(); const i = l.findIndex((x) => x.id === it.id); return it.details?.personColor ?? [1, 2, 4, 3][i % 4]; };
+const firstName = (it) => String(it.name || '').replace(/^turni\s+(di|del|della)\s+/i, '').split(' ')[0];
+
+function pageFamily() {
+  const people = famPeople(); const ym = curYM(); const [y, m] = ym.split('-').map(Number); const today = todayISO();
+  if (!people.length) return { title: 'Turni insieme', body: '<div class="empty"><p>Aggiungi prima i turni di una persona.</p></div>' };
+  if (!people.some((p) => p.id === state.famWho)) state.famWho = people[0].id;
+  const who = byId(people, state.famWho);
+  const maps = Object.fromEntries(people.map((p) => [p.id, shiftMap(p.id)]));
+  const cells = monthCells(ym).map((c) => {
+    const pills = people.map((p) => { const r = maps[p.id][c.iso]; if (!r) return `<span class="fam-pill none"></span>`; const t = shiftOf(p, r.kind); return `<span class="fam-pill sh-c${famColor(p)}">${esc(t.short)}</span>`; }).join('');
+    return `<button class="fam-cell ${c.inMonth ? '' : 'out'} ${c.iso === today ? 'today' : ''}" data-action="fam-day" data-day="${c.iso}"><span class="d">${c.n}</span>${pills}</button>`;
+  }).join('');
+  const whoChips = people.map((p) => `<button class="sh-chip sh-c${famColor(p)} ${p.id === who.id ? 'sel' : ''}" data-action="fam-who" data-id="${p.id}"><b>${esc(firstName(p).slice(0, 1).toUpperCase())}</b>${esc(firstName(p))}</button>`).join('');
+  const types = shiftTypes(who);
+  const painting = state.paint && (state.paint === '__erase' ? { label: 'gomma' } : shiftOf(who, state.paint));
+  const palette = readOnly() ? '' : `
+    <div class="group-title">Chi stai compilando?</div><div class="sh-palette">${whoChips}</div>
+    <div class="sh-palette">${types.map((t) => `<button class="sh-chip sh-c${t.color} ${state.paint === t.id ? 'sel' : ''}" data-action="shift-paint" data-type="${t.id}"><b>${esc(t.short)}</b>${esc(t.label)}</button>`).join('')}
+      <button class="sh-chip erase ${state.paint === '__erase' ? 'sel' : ''}" data-action="shift-paint" data-type="__erase">${ic('trash')}Gomma</button>
+      <button class="sh-chip more" data-action="shift-types" data-id="${who.id}">${ic('sliders')}Tipi</button></div>
+    <p class="hint sh-hint">${painting ? (state.paint === '__erase' ? `Tocca i giorni di ${esc(firstName(who))} da svuotare.` : `Tocca i giorni di ${esc(firstName(who))} da segnare come «${esc(painting.label)}».`) : 'Tocca un giorno per scegliere i turni di tutti. Oppure scegli persona e turno qui sopra e tocca più giorni in fila.'}</p>`;
+  const legend = people.map((p) => `<span class="sh-sum sh-c${famColor(p)}"><b>${esc(firstName(p))}</b></span>`).join('');
+  const body = `
+    <div class="card sh-card">
+      <div class="sh-nav">
+        <button class="icon-btn" data-action="shift-month" data-delta="-1" aria-label="Mese precedente">${ic('back')}</button>
+        <button class="sh-title" data-action="shift-month" data-delta="0">${MONTHS_LONG[m - 1]} ${y}</button>
+        <button class="icon-btn" data-action="shift-month" data-delta="1" aria-label="Mese successivo">${ic('next')}</button>
+      </div>
+      <div class="sh-week">${['L', 'M', 'M', 'G', 'V', 'S', 'D'].map((x) => `<span>${x}</span>`).join('')}</div>
+      <div class="sh-grid fam-grid">${cells}</div>
+      <div class="sh-sums">${legend}</div>
+    </div>
+    ${palette}
+    <div class="actions row-actions">
+      ${readOnly() ? '' : `<button class="btn secondary" data-action="shift-cycle" data-id="${who.id}">${ic('repeat')}Ripeti un ciclo (${esc(firstName(who))})</button>`}
+      <button class="btn secondary" data-action="fam-print">${ic('printer')}Stampa</button>
+    </div>`;
+  return { title: 'Turni insieme', body };
+}
+
+function openFamilyDay(iso) {
+  const d = fromISO(iso);
+  const blocks = famPeople().map((p) => {
+    const row = state.shifts.find((x) => x.item_id === p.id && x.day === iso);
+    return `<div class="group-title">${esc(firstName(p))}</div>
+      <div class="sh-palette">${shiftTypes(p).map((t) => `<button class="sh-chip sh-c${t.color} ${row?.kind === t.id ? 'sel' : ''}" data-action="fam-pick" data-item="${p.id}" data-day="${iso}" data-type="${t.id}"><b>${esc(t.short)}</b>${esc(t.label)}${shiftHours(t) ? ` ${shiftHours(t)}` : ''}</button>`).join('')}
+      ${row ? `<button class="sh-chip erase" data-action="fam-clear" data-item="${p.id}" data-day="${iso}">${ic('trash')}Svuota</button>` : ''}</div>`;
+  }).join('');
+  openSheet(`${DAYS_LONG[d.getDay()]} ${d.getDate()} ${MONTHS_LONG[d.getMonth()]}`, blocks + `<p class="hint">Le modifiche si salvano subito. Tocca fuori per chiudere.</p>`, { noAnim: !!sheetOpen });
+}
+
+function printFamily() {
+  const people = famPeople(); const ym = curYM(); const [y, m] = ym.split('-').map(Number);
+  const maps = Object.fromEntries(people.map((p) => [p.id, shiftMap(p.id)]));
+  const used = {};
+  const rows = []; const cells = monthCells(ym);
+  for (let i = 0; i < cells.length; i += 7) {
+    rows.push(`<tr>${cells.slice(i, i + 7).map((c) => `<td class="${c.inMonth ? '' : 'out'}"><span class="d">${c.n}</span>${c.inMonth ? people.map((p) => {
+      const r = maps[p.id][c.iso]; if (!r) return `<div class="pr-line"></div>`;
+      const t = shiftOf(p, r.kind); (used[t.short + '|' + t.label + '|' + shiftHours(t)] = 1);
+      return `<div class="pr-line pr-c${famColor(p)}"><i>${esc(firstName(p).slice(0, 1))}</i><b>${esc(t.short)}</b><small>${esc(shiftHours(t))}</small></div>`;
+    }).join('') : ''}</td>`).join('')}</tr>`);
+  }
+  const legend = Object.keys(used).map((k) => { const [a, b, h] = k.split('|'); return `<span class="pr-leg"><b>${esc(a)}</b> ${esc(b)}${h ? ' ' + esc(h) : ''}</span>`; }).join('');
+  const who = people.map((p) => `<span class="pr-leg pr-c${famColor(p)}"><b>${esc(firstName(p).slice(0, 1))}</b> ${esc(firstName(p))}</span>`).join('');
+  let root = document.getElementById('print-root');
+  if (!root) { root = document.createElement('div'); root.id = 'print-root'; document.body.appendChild(root); }
+  root.innerHTML = `
+    <div class="pr-head"><h1>Turni di ${people.map((p) => esc(firstName(p))).join(' e ')}</h1><div>${MONTHS_LONG[m - 1].charAt(0).toUpperCase() + MONTHS_LONG[m - 1].slice(1)} ${y}</div></div>
+    <table class="pr-grid pr-fam"><thead><tr>${['Lunedì', 'Martedì', 'Mercoledì', 'Giovedì', 'Venerdì', 'Sabato', 'Domenica'].map((x) => `<th>${x}</th>`).join('')}</tr></thead><tbody>${rows.join('')}</tbody></table>
+    <div class="pr-legend">${who}</div><div class="pr-legend">${legend}</div>`;
+  setTimeout(() => window.print(), 80);
+}
+
 function shiftsTodayCard() {
   const today = todayISO(); const tom = toISO(new Date(fromISO(today).getTime() + 86400000));
   const rows = state.items.filter((i) => itemType(i).shifts).map((it) => {
@@ -748,7 +828,9 @@ function shiftsTodayCard() {
     return `<button class="row" data-action="open-item" data-id="${it.id}">${tile('briefcase', 'altro')}
       <div class="main"><div class="t">${esc(it.name)}</div><div class="s sh-today">${part(a, 'oggi')}${part(b, 'domani')}</div></div><span class="chev">${ic('next')}</span></button>`;
   }).join('');
-  return rows ? `<div class="group-title">Turni</div><div class="list">${rows}</div>` : '';
+  const all = state.items.filter((i) => itemType(i).shifts).length >= 2
+    ? `<button class="row" data-action="open-family">${tile('briefcase', 'altro')}<div class="main"><div class="t">Turni insieme</div><div class="s">Il calendario di tutti</div></div><span class="chev">${ic('next')}</span></button>` : '';
+  return rows || all ? `<div class="group-title">Turni</div><div class="list">${all}${rows}</div>` : '';
 }
 
 /* --- posta da confermare --- */
@@ -869,7 +951,9 @@ function pageSection(cat) {
     };
   }
   const sum = costSummary(inCat(cat));
-  const cards = items.map((it) => {
+  const famRow = items.filter((i) => itemType(i).shifts).length >= 2
+    ? `<button class="row" data-action="open-family">${tile('briefcase', cat)}<div class="main"><div class="t">Turni insieme</div><div class="s">Un solo calendario per tutti</div></div><span class="chev">${ic('next')}</span></button>` : '';
+  const cards = famRow + items.map((it) => {
     const own = state.deadlines.filter((d) => d.item_id === it.id && !d.paid);
     const next = own[0];
     const yearly = sum.byItem[it.id] || 0;
@@ -1924,7 +2008,7 @@ async function onJoinHousehold(form) {
 }
 
 /* ---------- eventi ---------- */
-const WRITE_ACTIONS = new Set(['shift-day', 'shift-paint', 'shift-pick', 'shift-clear', 'shift-types', 'shift-cycle', 'new-shift-type', 'edit-shift-type', 'new-history', 'delete-history', 'new-deadline', 'new-item', 'new-log', 'edit-item', 'delete-item', 'hide-section', 'unhide-section', 'delete-deadline', 'delete-log', 'pay-form', 'reopen-form', 'inbox-add', 'inbox-paid', 'inbox-skip']);
+const WRITE_ACTIONS = new Set(['fam-day', 'fam-pick', 'fam-clear', 'fam-who', 'shift-day', 'shift-paint', 'shift-pick', 'shift-clear', 'shift-types', 'shift-cycle', 'new-shift-type', 'edit-shift-type', 'new-history', 'delete-history', 'new-deadline', 'new-item', 'new-log', 'edit-item', 'delete-item', 'hide-section', 'unhide-section', 'delete-deadline', 'delete-log', 'pay-form', 'reopen-form', 'inbox-add', 'inbox-paid', 'inbox-skip']);
 document.addEventListener('click', async (e) => {
   const el = e.target.closest('[data-action]');
   if (!el) return;
@@ -1935,7 +2019,17 @@ document.addEventListener('click', async (e) => {
   switch (a) {
     case 'tab': state.tab = el.dataset.tab; state.itemId = null; render(); window.scrollTo(0, 0); break;
     case 'open-item': { const it = byId(state.items, id); if (it) { state.tab = it.category; state.itemId = id; state.anim = 'push'; render(); window.scrollTo(0, 0); } break; }
-    case 'back': state.itemId = null; state.anim = 'pop'; render(); window.scrollTo(0, 0); break;
+    case 'open-family': state.fam = true; state.itemId = null; state.paint = null; state.anim = 'push'; render(); window.scrollTo(0, 0); break;
+    case 'fam-who': state.famWho = id; state.paint = null; render(); break;
+    case 'fam-day': {
+      if (state.paint) { if (applyShift(state.famWho, el.dataset.day, state.paint === '__erase' ? null : state.paint)) render(); }
+      else openFamilyDay(el.dataset.day);
+      break;
+    }
+    case 'fam-pick': if (applyShift(el.dataset.item, el.dataset.day, el.dataset.type)) { render(); openFamilyDay(el.dataset.day); } break;
+    case 'fam-clear': if (applyShift(el.dataset.item, el.dataset.day, null)) { render(); openFamilyDay(el.dataset.day); } break;
+    case 'fam-print': printFamily(); break;
+    case 'back': state.itemId = null; state.fam = false; state.paint = null; state.anim = 'pop'; render(); window.scrollTo(0, 0); break;
     case 'new-deadline': openDeadlineForm(null, el.dataset.item); break;
     case 'edit-deadline': {
       const dl = byId(state.deadlines, id); const it = dl && byId(state.items, dl.item_id);

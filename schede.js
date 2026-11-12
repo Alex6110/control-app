@@ -375,14 +375,17 @@
   const xk = (id, label, icon, rec) => ({ id, label, icon, rec, cats: [] });
   // Turni di lavoro: sigla breve, colore (indice della palette in CSS) e orario facoltativo.
   const SHIFT_TYPES = [
-    { id: 'mattina', label: 'Mattina', short: 'M', color: 1, from: '06:00', to: '14:00' },
-    { id: 'pomeriggio', label: 'Pomeriggio', short: 'P', color: 2, from: '14:00', to: '22:00' },
-    { id: 'notte', label: 'Notte', short: 'N', color: 3, from: '22:00', to: '06:00' },
-    { id: 'giornata', label: 'Giornata intera', short: 'G', color: 4, from: '08:00', to: '17:00' },
+    { id: 's1', label: 'Mattina', short: '1', color: 1, from: '08:00', to: '14:00' },
+    { id: 's1c', label: 'Mattina presto', short: '1C', color: 9, from: '06:00', to: '14:00' },
+    { id: 's2a', label: 'Intermedio', short: '2A', color: 4, from: '13:00', to: '19:00' },
+    { id: 's2', label: 'Pomeriggio', short: '2', color: 2, from: '14:00', to: '22:00' },
+    { id: 's3', label: 'Notte', short: '3', color: 3, from: '22:00', to: '06:00' },
+    { id: 'smonto', label: 'Smonto notte', short: 'S', color: 11 },
     { id: 'riposo', label: 'Riposo', short: 'R', color: 0 },
+    { id: 'rep', label: 'Reperibilità', short: 'REP', color: 8, from: '00:00', to: '08:00' },
     { id: 'ferie', label: 'Ferie', short: 'F', color: 5 },
+    { id: 'permesso', label: 'Permesso', short: 'P', color: 7 },
     { id: 'malattia', label: 'Malattia', short: 'Ma', color: 6 },
-    { id: 'permesso', label: 'Permesso', short: 'Pe', color: 7 },
   ];
 
   const EXTRA_KINDS = [

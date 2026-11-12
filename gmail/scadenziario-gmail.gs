@@ -31,7 +31,7 @@ var MESI = { gennaio: 1, febbraio: 2, marzo: 3, aprile: 4, maggio: 5, giugno: 6,
 
 var TIPI = [ // [id, etichetta, regex]  (l'ordine conta: il primo che trova vince)
   ['bollo', 'Bollo auto', /\bbollo\b|tassa automobilistica|tassa di propriet[àa] (?:auto|veicol)/i],
-  ['revisione', 'Revisione', /\brevisione\b/i],
+  ['revisione', 'Revisione', /\brevisione\b(?=[^\n]{0,80}(?:auto|veicol|moto|motorizzazione|targa|mctc))|(?:auto|veicol|moto|motorizzazione|targa)[^\n]{0,80}\brevisione\b/i],
   ['tagliando', 'Tagliando', /\btagliando\b/i],
   ['assicurazione', 'Assicurazione', /polizza|assicurazion|\brca\b|premio|rata (?:di )?premio|quietanza/i],
   ['imu', 'IMU', /\bimu\b|imposta municipale/i],
@@ -83,6 +83,8 @@ function trovaImporto(t) {
 var TARGA = /\b([A-Z]{2})\s?(\d{3})\s?([A-Z]{2})\b/;
 var TARGA_MOTO = /\b([A-Z]{2})\s?(\d{5})\b/;
 
+var TIPI_VEICOLO = { bollo: 1, revisione: 1, tagliando: 1, assicurazione: 1 };
+
 function trovaTipo(t) {
   for (var i = 0; i < TIPI.length; i++) if (TIPI[i][2].test(t)) return { id: TIPI[i][0], label: TIPI[i][1] };
   return null;
@@ -106,7 +108,8 @@ function nomeMittente(from) {
 function analizza(msg) {
   var allegati = (msg.allegati || []).join('\n');
   var t = ((msg.oggetto || '') + '\n' + (msg.corpo || '') + '\n' + allegati).replace(/[ \t\u00a0]+/g, ' ');
-  var tipo = trovaTipo((msg.oggetto || '') + ' ' + (msg.corpo || '') + ' ' + allegati) || trovaTipo(msg.mittente || '');
+  // il tipo si decide prima dall'oggetto, poi dal mittente, e solo per ultimo dal testo
+  var tipo = trovaTipo(msg.oggetto || '') || trovaTipo(msg.mittente || '') || trovaTipo((msg.corpo || '') + ' ' + allegati);
   if (!tipo) return [];
   var ricevuta = RICEVUTA.test(t) && !/in scadenza|le ricord|scadenza (?:rata|della)/i.test(t);
   var date = trovaDate(t);
@@ -135,6 +138,14 @@ function analizza(msg) {
     if (best || ricevuta) righe.push({ due_date: best ? best.d : null, amount: trovaImporto(t), plate: targa.replace(/\s/g, ''), ref: ref });
   }
   if (!righe.length) return [];
+  var assemblea = tipo.id === 'condominio' && /assemblea|convocazione/i.test(msg.oggetto || '');
+  if (assemblea) {
+    var dOgg = trovaDate(msg.oggetto || '')[0];
+    var dTesto = dOgg || date[0];
+    righe = [{ due_date: dTesto ? dTesto.d : null, amount: null, plate: '', ref: '' }];
+    tipo = { id: 'condominio', label: 'Assemblea condominio' };
+  }
+  if (!TIPI_VEICOLO[tipo.id]) righe.forEach(function (r) { r.plate = ''; });
   if (promo && !righe.some(function (r) { return r.due_date; })) return [];   // pubblicità senza scadenza
   if (promo && !ricevuta && !SCAD.test(t)) return [];
 

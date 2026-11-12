@@ -31,3 +31,15 @@ Ripeti dal punto 1 per l'altra Gmail, con la **stessa chiave**.
 - Lo script può leggere tutta la posta di quell'account (è il permesso che Google chiede), ma invia all'app solo: mittente, oggetto, data, importo, targa, numero polizza e link alla mail.
 - I PDF vengono convertiti in testo da Google Drive e il file temporaneo viene subito cestinato.
 - Il link alla mail funziona solo dove sei collegato a quella Gmail.
+
+---
+## Se il "+" accanto a Servizi non si apre
+1. Usa una finestra in incognito (o un profilo Chrome) con **solo** la Gmail da collegare, e consenti i popup per script.google.com.
+2. Impostazioni progetto (ingranaggio) → spunta «Mostra il file manifest appsscript.json», poi sostituiscilo con:
+```json
+{ "timeZone": "Europe/Rome",
+  "dependencies": { "enabledAdvancedServices": [ { "userSymbol": "Drive", "serviceId": "drive", "version": "v3" } ] },
+  "exceptionLogging": "STACKDRIVER", "runtimeVersion": "V8" }
+```
+3. Esegui `provaSenzaInviare` e consenti i permessi. Quando i risultati sono giusti, esegui `installaControlloAutomatico` una volta sola.
+4. Una copia dello script per ogni Gmail (papà e mamma), con **la stessa chiave della posta**.
