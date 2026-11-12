@@ -1,7 +1,28 @@
-# Scadenziario – guida (versione 3)
+# Scadenziario – guida (versione 5)
 
 PWA per tenere sotto controllo scadenze e costi di casa, mezzi e altro, condivisa tra più persone.
 File statici, nessun build. Costo: 0 € (Netlify + Supabase piano gratuito).
+
+## Novità della v5
+- **Storico per voce**: nulla si perde più. In ogni scheda (bollo, assicurazione, bollette…) c'è il tasto **Storico**: lista dei pagamenti, **grafico** e confronto con il pagamento precedente (es. "+6%"), con media e totale. Quando premi ✓ il pagamento entra da solo nello storico; puoi aggiungere anche quelli passati. Se invece sposti la scadenza in avanti dalla scheda, l'app chiede "La scadenza precedente è stata pagata?" e la conserva. In ogni mezzo/casa c'è anche **Storico dei pagamenti** con tutte le voci.
+- **Turni di lavoro**: in *Altro* scegli **Lavoro e turni** (uno per persona, es. "Turni di Mamma"). Calendario del mese: tocca un giorno per scegliere il turno (con nota), oppure scegli un tipo e tocca più giorni di seguito. **Ripeti un ciclo** compila da solo settimane o mesi (es. mattina, pomeriggio, notte, 2 riposi). I tipi di turno (nome, sigla, colore, orario) si personalizzano da **Tipi**. **Stampa** crea una pagina A4 per orizzontale (da iPhone: Stampa → pizzico sull'anteprima per salvarla in PDF o AirPrint). In Home compaiono i turni di oggi e domani. Le scadenze di lavoro (contratto, abbonamento trasporti…) restano sotto il calendario.
+
+### Aggiornamento v5 (in quest'ordine)
+1. **Supabase → SQL Editor**: incolla di nuovo tutto `supabase-schema.sql` → Run (aggiunge solo la tabella `shifts`).
+2. Carica i file su GitHub (tranne `config.js`); `sw.js` è già a `v7`.
+
+## Novità della v4
+- **Sola lettura**: due codici invito in Impostazioni, uno "Può modificare" (genitori) e uno "Solo lettura" (figli). Chi gestisce vede l'elenco delle persone e può cambiare il permesso o rimuoverle. Il blocco vale anche sul server (Supabase), non solo nell'app.
+- **Home "Da fare questa settimana"**: in cima solo ciò che è scaduto o scade entro 7 giorni, con il tasto ✓.
+- **Link ai documenti**: ogni voce, scadenza e lavoro ha un campo *Link* (mail, Drive…) e il tasto *Apri documento*. Niente viene caricato su Supabase.
+- **Da confermare**: riquadro in Home con le proposte che arrivano dalla posta (vedi `gmail/LEGGIMI-GMAIL.md`). Si preme *Aggiungi* (si apre il modulo già compilato) o *Scarta*. Se la mail porta la targa, la proposta si aggancia da sola al mezzo giusto.
+- **Script Gmail** (cartella `gmail/`): legge le mail e i PDF allegati (es. gli avvisi di scadenza Allianz) e manda le proposte all'app. Funziona anche con iPhone: gira sui server di Google.
+
+### Aggiornamento v4 (in quest'ordine)
+1. **Supabase → SQL Editor**: incolla di nuovo tutto `supabase-schema.sql` → Run. Aggiunge ruoli, codici, tabella `inbox`, campi link. I dati restano; chi c'è già mantiene i suoi permessi (chi ha creato lo spazio gestisce, gli altri modificano).
+2. Carica su GitHub tutti i file **tranne `config.js`**, compresa la cartella `gmail`.
+3. `sw.js` è già a `v6`. Apri l'app, entra in Impostazioni: vedrai i due codici e le persone.
+4. Solo quando vuoi la posta automatica: segui `gmail/LEGGIMI-GMAIL.md`.
 
 ## Novità della v3: schede specifiche per ogni categoria
 - **Mezzi**: scegli *Auto* o *Moto/scooter*. Dopo il nome (e la targa) un percorso guidato, saltabile, chiede una voce alla volta: dati del mezzo (immatricolazione, acquisto, km), assicurazione, bollo (o "esente"), revisione, tagliando, gomme, finanziamento. La prossima revisione si calcola da sola (4 anni dalla prima immatricolazione, poi ogni 2, a fine mese); il prossimo tagliando dall'ultimo.

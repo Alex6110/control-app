@@ -363,7 +363,8 @@
       list('abbonamenti', 'Abbonamenti', 'repeat', 'es. Streaming e palestra', ['abbonamento', 'telefono', 'internet'], 'Aggiungi un abbonamento', { defName: 'Abbonamenti' }),
       list('garanzie', 'Garanzie', 'box', 'es. Elettrodomestici', ['garanzia'], 'Aggiungi una garanzia', { defName: 'Garanzie' }),
       list('fisco', 'Tasse e fisco', 'percent', 'es. Tasse', ['dichiarazione', 'isee', 'tassa'], 'Aggiungi una scadenza fiscale', { defName: 'Tasse e fisco' }),
-      list('lavoro', 'Lavoro', 'briefcase', 'es. Lavoro', ['contratto_lavoro', 'trasporto', 'formazione', 'visita_lavoro'], 'Aggiungi una scadenza di lavoro', { defName: 'Lavoro' }),
+      list('lavoro', 'Lavoro e turni', 'briefcase', 'es. Turni di Mamma', ['contratto_lavoro', 'trasporto', 'formazione', 'visita_lavoro'], 'Aggiungi una scadenza di lavoro',
+        { defName: '', nameLabel: 'Di chi sono i turni?', sugg: ['Mamma', 'Papà'], shifts: true }),
       list('scuola', 'Scuola e sport', 'cap', 'es. Scuola di Marco', ['scuola', 'sport'], 'Aggiungi una scadenza'),
       list('banca', 'Carte e banca', 'card', 'es. Conto e carte', ['carta', 'conto'], 'Aggiungi una carta o un conto', { defName: 'Carte e banca' }),
       list('libero', 'Altro', 'tag', 'es. Qualsiasi cosa', ['altro', 'assicurazione', 'abbonamento', 'documento', 'salute', 'telefono', 'internet', 'tassa'], 'Aggiungi una scadenza'),
@@ -372,6 +373,18 @@
 
   // Tipi di scadenza in più rispetto all'elenco base dell'app (compaiono solo dove servono).
   const xk = (id, label, icon, rec) => ({ id, label, icon, rec, cats: [] });
+  // Turni di lavoro: sigla breve, colore (indice della palette in CSS) e orario facoltativo.
+  const SHIFT_TYPES = [
+    { id: 'mattina', label: 'Mattina', short: 'M', color: 1, from: '06:00', to: '14:00' },
+    { id: 'pomeriggio', label: 'Pomeriggio', short: 'P', color: 2, from: '14:00', to: '22:00' },
+    { id: 'notte', label: 'Notte', short: 'N', color: 3, from: '22:00', to: '06:00' },
+    { id: 'giornata', label: 'Giornata intera', short: 'G', color: 4, from: '08:00', to: '17:00' },
+    { id: 'riposo', label: 'Riposo', short: 'R', color: 0 },
+    { id: 'ferie', label: 'Ferie', short: 'F', color: 5 },
+    { id: 'malattia', label: 'Malattia', short: 'Ma', color: 6 },
+    { id: 'permesso', label: 'Permesso', short: 'Pe', color: 7 },
+  ];
+
   const EXTRA_KINDS = [
     xk('finanziamento', 'Finanziamento', 'wallet', 'monthly'), xk('mutuo', 'Mutuo', 'landmark', 'monthly'),
     xk('contratto', 'Contratto', 'file', 'none'),
@@ -387,7 +400,7 @@
     xk('carta', 'Carta di pagamento', 'card', 'none'), xk('conto', 'Conto', 'landmark', 'yearly'),
   ];
 
-  const api = { SECTIONS, TYPES, EXTRA_KINDS, nextRevisione, nextImu, computeAuto, untilFor, addMonths, eom, monthsOf };
+  const api = { SECTIONS, TYPES, EXTRA_KINDS, SHIFT_TYPES, nextRevisione, nextImu, computeAuto, untilFor, addMonths, eom, monthsOf };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   else root.SCHEDE = api;
 })(typeof window !== 'undefined' ? window : globalThis);

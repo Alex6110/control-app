@@ -1,5 +1,5 @@
 -- ============================================================
--- Scadenziario – schema Supabase (v2 spazio condiviso + v3 schede)
+-- Scadenziario – schema Supabase (v2 spazio condiviso + v3 schede + v4 ruoli e posta + v5 turni)
 --
 -- Incolla tutto nel SQL Editor di Supabase e premi "Run".
 -- Vale sia per un progetto nuovo sia per uno che ha già la v1:
@@ -209,3 +209,228 @@ alter table public.item_logs enable row level security;
 drop policy if exists "item_logs_household" on public.item_logs;
 create policy "item_logs_household" on public.item_logs
   for all to authenticated using (public.is_member(household_id)) with check (public.is_member(household_id));
+
+
+-- ============================================================
+-- v4: sola lettura, gestione membri, posta in arrivo ("Da confermare")
+-- Additivo e rilanciabile. I membri esistenti restano con i loro permessi.
+-- ============================================================
+
+-- Ruoli: owner (gestisce) | member (modifica) | viewer (solo lettura)
+alter table public.households add column if not exists invite_code_view text unique
+  default upper(substr(md5(random()::text || clock_timestamp()::text || 'v'), 1, 8));
+update public.households set invite_code_view = upper(substr(md5(random()::text || clock_timestamp()::text || id::text), 1, 8)) where invite_code_view is null;
+alter table public.households add column if not exists inbox_token text unique
+  default substr(md5(random()::text || clock_timestamp()::text || 't'), 1, 24) || substr(md5(random()::text || clock_timestamp()::text || 'u'), 1, 8);
+update public.households set inbox_token = substr(md5(random()::text || id::text), 1, 24) || substr(md5(random()::text || clock_timestamp()::text), 1, 8) where inbox_token is null;
+
+-- I codici e il token non si leggono più direttamente: si passa dalle funzioni qui sotto.
+revoke select on public.households from authenticated, anon;
+grant  select (id, name, created_by, created_at) on public.households to authenticated;
+revoke update on public.households from authenticated, anon;
+grant  update (name) on public.households to authenticated;
+
+create or replace function public.can_edit(h uuid)
+returns boolean language sql security definer stable set search_path = public as $$
+  select exists (
+    select 1 from public.household_members m
+    where m.household_id = h and m.user_id = auth.uid() and m.role in ('owner', 'member')
+  );
+$$;
+create or replace function public.is_owner(h uuid)
+returns boolean language sql security definer stable set search_path = public as $$
+  select exists (
+    select 1 from public.household_members m
+    where m.household_id = h and m.user_id = auth.uid() and m.role = 'owner'
+  );
+$$;
+
+-- Il mio ruolo
+create or replace function public.my_role(h uuid)
+returns text language sql security definer stable set search_path = public as $$
+  select role from public.household_members where household_id = h and user_id = auth.uid();
+$$;
+
+-- Entra con un codice: quello normale dà la modifica, quello "solo lettura" dà la sola lettura.
+create or replace function public.join_household(p_code text)
+returns uuid language plpgsql security definer set search_path = public as $$
+declare h uuid; cur uuid; r text; c text := upper(trim(p_code));
+begin
+  if auth.uid() is null then raise exception 'non autenticato'; end if;
+  select id, 'member' into h, r from public.households where invite_code = c;
+  if h is null then
+    select id, 'viewer' into h, r from public.households where invite_code_view = c;
+  end if;
+  if h is null then raise exception 'codice non valido'; end if;
+  select household_id into cur from public.household_members where user_id = auth.uid();
+  if cur is not null and cur <> h then raise exception 'sei già in uno spazio condiviso'; end if;
+  insert into public.household_members (household_id, user_id, role) values (h, auth.uid(), r) on conflict do nothing;
+  return h;
+end $$;
+
+-- Codici e token: li vede solo chi gestisce lo spazio.
+create or replace function public.get_invites(p_household uuid)
+returns table (invite_code text, invite_code_view text, inbox_token text)
+language plpgsql security definer stable set search_path = public as $$
+begin
+  if not public.is_owner(p_household) then raise exception 'non autorizzato'; end if;
+  return query select h.invite_code, h.invite_code_view, h.inbox_token from public.households h where h.id = p_household;
+end $$;
+
+-- Nuovo codice (kind: edit | view | token)
+drop function if exists public.regenerate_invite(uuid);
+create or replace function public.regenerate_invite(p_household uuid, p_kind text default 'edit')
+returns text language plpgsql security definer set search_path = public as $$
+declare c text;
+begin
+  if not public.is_owner(p_household) then raise exception 'non autorizzato'; end if;
+  if p_kind = 'view' then
+    update public.households set invite_code_view = upper(substr(md5(random()::text || clock_timestamp()::text), 1, 8)) where id = p_household returning invite_code_view into c;
+  elsif p_kind = 'token' then
+    update public.households set inbox_token = substr(md5(random()::text || clock_timestamp()::text), 1, 24) || substr(md5(random()::text), 1, 8) where id = p_household returning inbox_token into c;
+  else
+    update public.households set invite_code = upper(substr(md5(random()::text || clock_timestamp()::text), 1, 8)) where id = p_household returning invite_code into c;
+  end if;
+  return c;
+end $$;
+
+-- Elenco persone dello spazio (con e-mail e ruolo)
+create or replace function public.list_members(p_household uuid)
+returns table (user_id uuid, email text, role text)
+language plpgsql security definer stable set search_path = public as $$
+begin
+  if not public.is_member(p_household) then raise exception 'non autorizzato'; end if;
+  return query
+    select m.user_id, u.email::text, m.role
+    from public.household_members m join auth.users u on u.id = m.user_id
+    where m.household_id = p_household
+    order by (m.role = 'owner') desc, m.created_at;
+end $$;
+
+create or replace function public.set_member_role(p_household uuid, p_user uuid, p_role text)
+returns void language plpgsql security definer set search_path = public as $$
+begin
+  if not public.is_owner(p_household) then raise exception 'non autorizzato'; end if;
+  if p_role not in ('member', 'viewer') then raise exception 'ruolo non valido'; end if;
+  if p_user = auth.uid() then raise exception 'non puoi cambiare il tuo ruolo'; end if;
+  update public.household_members set role = p_role where household_id = p_household and user_id = p_user and role <> 'owner';
+end $$;
+
+create or replace function public.remove_member(p_household uuid, p_user uuid)
+returns void language plpgsql security definer set search_path = public as $$
+begin
+  if not public.is_owner(p_household) then raise exception 'non autorizzato'; end if;
+  if p_user = auth.uid() then raise exception 'non puoi rimuovere te stesso'; end if;
+  delete from public.household_members where household_id = p_household and user_id = p_user and role <> 'owner';
+end $$;
+
+-- Posta in arrivo: proposte create dallo script Gmail, da confermare nell'app.
+create table if not exists public.inbox (
+  id           uuid primary key default gen_random_uuid(),
+  household_id uuid not null references public.households(id) on delete cascade,
+  ext_id       text not null,                       -- id univoco (messaggio + allegato) per non duplicare
+  status       text not null default 'new',         -- new | done | dismissed
+  sender       text,
+  subject      text,
+  kind         text,                                -- assicurazione, bolletta, ...
+  title        text,
+  due_date     date,
+  amount       numeric(10,2),
+  plate        text,
+  ref          text,                                -- n. polizza / contratto
+  link         text,                                -- collegamento alla mail
+  note         text,
+  paid_hint    boolean not null default false,      -- la mail sembra una quietanza/ricevuta di pagamento
+  created_at   timestamptz not null default now(),
+  unique (household_id, ext_id)
+);
+create index if not exists inbox_household_status on public.inbox (household_id, status);
+
+-- Invio dallo script: serve il token dello spazio. Non richiede l'accesso (chiave pubblica + token).
+create or replace function public.submit_inbox(p_token text, p_rows jsonb)
+returns integer language plpgsql security definer set search_path = public as $$
+declare h uuid; r jsonb; n integer := 0;
+begin
+  select id into h from public.households where inbox_token = p_token;
+  if h is null then raise exception 'token non valido'; end if;
+  if jsonb_typeof(p_rows) <> 'array' or jsonb_array_length(p_rows) > 50 then raise exception 'dati non validi'; end if;
+  for r in select * from jsonb_array_elements(p_rows) loop
+    insert into public.inbox (household_id, ext_id, sender, subject, kind, title, due_date, amount, plate, ref, link, note, paid_hint)
+    values (
+      h, left(r->>'ext_id', 200), left(r->>'sender', 200), left(r->>'subject', 300), left(r->>'kind', 40), left(r->>'title', 200),
+      nullif(r->>'due_date', '')::date, nullif(r->>'amount', '')::numeric, left(upper(r->>'plate'), 12), left(r->>'ref', 80),
+      left(r->>'link', 500), left(r->>'note', 500), coalesce((r->>'paid_hint')::boolean, false)
+    ) on conflict (household_id, ext_id) do nothing;
+    if found then n := n + 1; end if;
+  end loop;
+  return n;
+end $$;
+
+revoke all on function public.can_edit(uuid), public.is_owner(uuid), public.my_role(uuid), public.get_invites(uuid),
+  public.regenerate_invite(uuid, text), public.list_members(uuid), public.set_member_role(uuid, uuid, text),
+  public.remove_member(uuid, uuid), public.submit_inbox(text, jsonb) from public, anon;
+grant execute on function public.can_edit(uuid), public.is_owner(uuid), public.my_role(uuid), public.get_invites(uuid),
+  public.regenerate_invite(uuid, text), public.list_members(uuid), public.set_member_role(uuid, uuid, text),
+  public.remove_member(uuid, uuid) to authenticated;
+grant execute on function public.submit_inbox(text, jsonb) to anon, authenticated;
+
+-- Politiche: tutti i membri leggono, scrive solo chi può modificare.
+alter table public.inbox enable row level security;
+drop policy if exists "inbox_select" on public.inbox;
+create policy "inbox_select" on public.inbox for select to authenticated using (public.is_member(household_id));
+drop policy if exists "inbox_update" on public.inbox;
+create policy "inbox_update" on public.inbox for update to authenticated using (public.can_edit(household_id)) with check (public.can_edit(household_id));
+drop policy if exists "inbox_delete" on public.inbox;
+create policy "inbox_delete" on public.inbox for delete to authenticated using (public.can_edit(household_id));
+
+do $$
+declare t text;
+begin
+  foreach t in array array['items', 'deadlines', 'item_logs'] loop
+    execute format('drop policy if exists "%1$s_household" on public.%1$s', t);
+    execute format('drop policy if exists "%1$s_read" on public.%1$s', t);
+    execute format('drop policy if exists "%1$s_write" on public.%1$s', t);
+    execute format('drop policy if exists "%1$s_ins" on public.%1$s', t);
+    execute format('drop policy if exists "%1$s_upd" on public.%1$s', t);
+    execute format('drop policy if exists "%1$s_del" on public.%1$s', t);
+    execute format('create policy "%1$s_read" on public.%1$s for select to authenticated using (public.is_member(household_id))', t);
+    execute format('create policy "%1$s_ins" on public.%1$s for insert to authenticated with check (public.can_edit(household_id))', t);
+    execute format('create policy "%1$s_upd" on public.%1$s for update to authenticated using (public.can_edit(household_id)) with check (public.can_edit(household_id))', t);
+    execute format('create policy "%1$s_del" on public.%1$s for delete to authenticated using (public.can_edit(household_id))', t);
+  end loop;
+end $$;
+
+drop policy if exists "households_update" on public.households;
+create policy "households_update" on public.households
+  for update to authenticated using (public.is_owner(id)) with check (public.is_owner(id));
+
+-- Link a documenti (mail, Drive…) nelle scadenze e nei lavori
+alter table public.deadlines add column if not exists link text;
+alter table public.item_logs add column if not exists link text;
+
+
+-- ============================================================
+-- v5: calendario dei turni di lavoro (un record per persona e giorno)
+-- Additivo e rilanciabile.
+-- ============================================================
+create table if not exists public.shifts (
+  id           uuid primary key default gen_random_uuid(),
+  household_id uuid not null references public.households(id) on delete cascade,
+  item_id      uuid not null references public.items(id) on delete cascade,
+  day          date not null,
+  kind         text not null,            -- id del tipo di turno (mattina, pomeriggio, notte, riposo, ferie… o uno personalizzato)
+  note         text,
+  created_at   timestamptz not null default now(),
+  unique (item_id, day)
+);
+create index if not exists shifts_household_day on public.shifts (household_id, day);
+
+alter table public.shifts enable row level security;
+drop policy if exists "shifts_read" on public.shifts;
+drop policy if exists "shifts_ins" on public.shifts;
+drop policy if exists "shifts_upd" on public.shifts;
+drop policy if exists "shifts_del" on public.shifts;
+create policy "shifts_read" on public.shifts for select to authenticated using (public.is_member(household_id));
+create policy "shifts_ins"  on public.shifts for insert to authenticated with check (public.can_edit(household_id));
+create policy "shifts_upd"  on public.shifts for update to authenticated using (public.can_edit(household_id)) with check (public.can_edit(household_id));
+create policy "shifts_del"  on public.shifts for delete to authenticated using (public.can_edit(household_id));

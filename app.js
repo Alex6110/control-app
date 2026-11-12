@@ -114,19 +114,22 @@ function relative(iso) {
   return m < 12 ? (m <= 1 ? "tra circa un mese" : `tra ${m} mesi`) : (m < 18 ? "tra circa un anno" : `tra ${(m / 12).toFixed(1).replace(".", ",").replace(",0", "")} anni`);
 }
 const urgency = (iso) => { const d = diffDays(todayISO(), iso); return d < 0 ? 'late' : d <= 7 ? 'soon' : ''; };
+const safeUrl = (u) => { try { const x = new URL(String(u || '').trim()); return /^https?:$/.test(x.protocol) ? x.href : ''; } catch { return ''; } };
+const linkBtn = (u, label = 'Apri documento') => { const h = safeUrl(u); return h ? `<a class="btn secondary linkbtn" href="${esc(h)}" target="_blank" rel="noopener noreferrer">${ic('file')}${label}</a>` : ''; };
+const LINK_FIELD = { k: 'link', l: 'Link al documento (facoltativo)', t: 'text', ph: 'Incolla un link: mail, Drive…', hint: 'Così il documento è sempre a un tocco, senza caricarlo qui.' };
 const tile = (icon, cat) => `<div class="tile tint-${cat || 'altro'}">${ic(icon)}</div>`;
 
 /* ---------- stato ---------- */
 const state = {
-  tab: 'home', itemId: null, items: [], deadlines: [], logs: [],
-  user: null, hid: null, household: null, members: 1,
+  tab: 'home', itemId: null, items: [], deadlines: [], logs: [], shifts: [], shiftMonth: '', paint: null,
+  user: null, hid: null, household: null, members: 1, role: 'owner', memberList: [], invites: null, inbox: [],
   ready: false, offline: !navigator.onLine, loadError: '', authMode: 'login', anim: '',
 };
 let sb = null;
 
 /* ---------- archivio: locale o Supabase ---------- */
 const LS = 'scadenziario.data.v1';
-const emptyData = () => ({ items: [], deadlines: [], item_logs: [] });
+const emptyData = () => ({ items: [], deadlines: [], item_logs: [], inbox: [], shifts: [] });
 const readLocal = () => { try { return { ...emptyData(), ...(JSON.parse(localStorage.getItem(LS)) || {}) }; } catch { return emptyData(); } };
 const writeLocal = (d) => localStorage.setItem(LS, JSON.stringify(d));
 const uuid = () => (crypto.randomUUID ? crypto.randomUUID() : 'id-' + Date.now() + '-' + Math.random().toString(16).slice(2));
@@ -138,6 +141,15 @@ const localStore = {
     const r = { id: uuid(), created_at: new Date().toISOString(), ...row };
     d[t].push(r); writeLocal(d); return r;
   },
+  async upsertShifts(rows) {
+    const d = readLocal(); const out = [];
+    for (const r of rows) {
+      const i = d.shifts.findIndex((x) => x.item_id === r.item_id && x.day === r.day);
+      if (i >= 0) { d.shifts[i] = { ...d.shifts[i], ...r }; out.push(d.shifts[i]); }
+      else { const n = { id: uuid(), created_at: new Date().toISOString(), ...r }; d.shifts.push(n); out.push(n); }
+    }
+    writeLocal(d); return out;
+  },
   async update(t, id, patch) {
     const d = readLocal();
     const i = d[t].findIndex((x) => x.id === id);
@@ -146,7 +158,7 @@ const localStore = {
   async remove(t, id) {
     const d = readLocal();
     d[t] = d[t].filter((x) => x.id !== id);
-    if (t === 'items') { d.deadlines = d.deadlines.filter((x) => x.item_id !== id); d.item_logs = d.item_logs.filter((x) => x.item_id !== id); }
+    if (t === 'items') { d.deadlines = d.deadlines.filter((x) => x.item_id !== id); d.item_logs = d.item_logs.filter((x) => x.item_id !== id); d.shifts = d.shifts.filter((x) => x.item_id !== id); }
     writeLocal(d);
   },
 };
@@ -161,12 +173,19 @@ const cloudStore = {
     ]);
     if (a.error) throw a.error;
     if (b.error) throw b.error;
-    return { items: a.data, deadlines: b.data.map(numAmount), item_logs: c.error ? [] : c.data.map(numAmount) };
+    const d = await sb.from('inbox').select('*').eq('status', 'new').order('due_date', { nullsFirst: false });
+    const sh = await sb.from('shifts').select('*').gte('day', addMonths(todayISO(), -18));
+    return { items: a.data, deadlines: b.data.map(numAmount), item_logs: c.error ? [] : c.data.map(numAmount), inbox: d.error ? [] : d.data.map(numAmount), shifts: sh.error ? [] : sh.data };
   },
   async insert(t, row) {
     const { data, error } = await sb.from(t).insert({ household_id: state.hid, ...row }).select().single();
     if (error) throw error;
     return t === 'items' ? data : numAmount(data);
+  },
+  async upsertShifts(rows) {
+    const { data, error } = await sb.from('shifts').upsert(rows.map((r) => ({ household_id: state.hid, ...r })), { onConflict: 'item_id,day' }).select();
+    if (error) throw error;
+    return data;
   },
   async update(t, id, patch) {
     const { data, error } = await sb.from(t).update(patch).eq('id', id).select().single();
@@ -180,7 +199,10 @@ const cloudStore = {
 };
 const store = MODE === 'cloud' ? cloudStore : localStore;
 
+const readOnly = () => state.role === 'viewer';
+const ROLE_LABEL = { owner: 'Gestisce', member: 'Può modificare', viewer: 'Solo lettura' };
 function canWrite() {
+  if (readOnly()) { toast('Hai accesso in sola lettura: non puoi modificare.'); return false; }
   if (MODE === 'cloud' && (state.offline || state.loadError)) { toast('Sei offline: per ora puoi solo consultare i dati.'); return false; }
   return true;
 }
@@ -385,6 +407,7 @@ function render() {
   const item = state.itemId ? byId(state.items, state.itemId) : null;
   if (state.itemId && !item) state.itemId = null;
 
+  if (!(item && itemType(item).shifts)) state.paint = null;
   let page;
   if (item) page = pageItem(item);
   else if (state.tab === 'home') page = pageHome();
@@ -395,7 +418,7 @@ function render() {
     : (state.loadError ? `<div class="banner">${ic('alert')}<span>${esc(state.loadError)}</span></div>` : '');
 
   const left = item ? `<button class="icon-btn" data-action="back" aria-label="Indietro">${ic('back')}</button>` : '';
-  const right = item
+  const right = item && !readOnly()
     ? `<button class="icon-btn" data-action="item-menu" data-id="${item.id}" aria-label="Opzioni">${ic('dots')}</button>`
     : `<button class="icon-btn" data-action="settings" aria-label="Impostazioni">${ic('sliders')}</button>`;
 
@@ -404,7 +427,7 @@ function render() {
       ${left}<h1>${esc(page.title)}</h1>${right}
     </div></header>
     <main class="wrap ${state.anim === 'push' ? 'page-in' : state.anim === 'pop' ? 'page-back' : ''}">${banner}${page.body}</main>
-    ${page.fab ? `<button class="fab" data-action="new-deadline" ${page.fabItem ? `data-item="${page.fabItem}"` : ''}>${ic('plus')}<span>Scadenza</span></button>` : ''}
+    ${page.fab && !readOnly() ? `<button class="fab" data-action="new-deadline" ${page.fabItem ? `data-item="${page.fabItem}"` : ''}>${ic('plus')}<span>Scadenza</span></button>` : ''}
     <nav class="nav"><div class="inner">
       ${NAV.map(([id, icon, label]) => `<button data-action="tab" data-tab="${id}" class="${state.tab === id ? 'active' : ''}" aria-label="${label}">${ic(icon)}<span>${label}</span></button>`).join('')}
     </div></nav>`;
@@ -475,6 +498,322 @@ function emptyStart() {
     </div>`;
 }
 
+/* ---------- turni di lavoro ---------- */
+const SHIFT_TYPES = SCHEDE.SHIFT_TYPES;
+const MONTHS_LONG = ['gennaio', 'febbraio', 'marzo', 'aprile', 'maggio', 'giugno', 'luglio', 'agosto', 'settembre', 'ottobre', 'novembre', 'dicembre'];
+const DAYS_LONG = ['domenica', 'lunedì', 'martedì', 'mercoledì', 'giovedì', 'venerdì', 'sabato'];
+const SHIFT_COLORS = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11];
+
+function shiftTypes(it, withHidden) {
+  const ov = it.details?.shiftTypes || [];
+  const base = SHIFT_TYPES.map((d) => ({ ...d, ...(ov.find((o) => o.id === d.id) || {}) }));
+  const custom = ov.filter((o) => !SHIFT_TYPES.some((d) => d.id === o.id)).map((o) => ({ ...o, custom: true }));
+  const all = [...base, ...custom];
+  return withHidden ? all : all.filter((x) => !x.hidden);
+}
+const shiftOf = (it, id) => shiftTypes(it, true).find((x) => x.id === id) || { id, label: id, short: '?', color: 0 };
+const shiftHours = (t) => (t.from && t.to ? `${t.from}–${t.to}` : '');
+const shiftMap = (itemId) => Object.fromEntries(state.shifts.filter((x) => x.item_id === itemId).map((x) => [x.day, x]));
+const curYM = () => state.shiftMonth || todayISO().slice(0, 7);
+
+function monthCells(ym) {
+  const [y, m] = ym.split('-').map(Number);
+  const lead = (new Date(y, m - 1, 1, 12).getDay() + 6) % 7;
+  const days = new Date(y, m, 0).getDate();
+  const total = Math.ceil((lead + days) / 7) * 7;
+  return Array.from({ length: total }, (_, i) => {
+    const d = new Date(y, m - 1, 1 - lead + i, 12);
+    return { iso: toISO(d), n: d.getDate(), inMonth: d.getMonth() === m - 1 };
+  });
+}
+
+let shiftQ = Promise.resolve();
+const persistShift = (fn) => { shiftQ = shiftQ.then(fn).catch(async (e) => { fail(e); try { const d = await store.load(); state.shifts = d.shifts || []; render(); } catch {} }); return shiftQ; };
+
+// Cambia (o svuota) un giorno: l'aggiornamento a schermo è immediato, il salvataggio avviene subito dopo, in ordine.
+function applyShift(itemId, day, kind, note) {
+  if (!canWrite()) return false;
+  const row = state.shifts.find((x) => x.item_id === itemId && x.day === day);
+  if (!kind) {
+    if (!row) return true;
+    state.shifts = state.shifts.filter((x) => x !== row);
+    persistShift(() => store.remove('shifts', row.id));
+  } else if (row) {
+    const n = note === undefined ? row.note : (note || null);
+    if (row.kind === kind && n === row.note) return true;
+    row.kind = kind; row.note = n || null;
+    persistShift(() => store.update('shifts', row.id, { kind: row.kind, note: row.note }));
+  } else {
+    const nr = { id: 'tmp-' + uuid(), tmp: true, item_id: itemId, day, kind, note: note || null };
+    state.shifts.push(nr);
+    persistShift(async () => { const r = await store.insert('shifts', { item_id: itemId, day, kind: nr.kind, note: nr.note }); Object.assign(nr, r); delete nr.tmp; });
+  }
+  return true;
+}
+
+function applyShiftsBulk(itemId, entries) {   // entries: [{day, kind}]
+  if (!canWrite()) return false;
+  const touched = [];
+  for (const e of entries) {
+    const row = state.shifts.find((x) => x.item_id === itemId && x.day === e.day);
+    if (row) { row.kind = e.kind; touched.push(row); }
+    else { const nr = { id: 'tmp-' + uuid(), tmp: true, item_id: itemId, day: e.day, kind: e.kind, note: null }; state.shifts.push(nr); touched.push(nr); }
+  }
+  persistShift(async () => {
+    const out = await store.upsertShifts(touched.map((r) => ({ item_id: r.item_id, day: r.day, kind: r.kind, note: r.note ?? null })));
+    for (const o of out) { const r = touched.find((x) => x.day === o.day); if (r) { Object.assign(r, o); delete r.tmp; } }
+  });
+  return true;
+}
+
+function shiftsBlock(it) {
+  const ym = curYM(); const [y, m] = ym.split('-').map(Number);
+  const map = shiftMap(it.id); const types = shiftTypes(it); const today = todayISO();
+  const cells = monthCells(ym).map((c) => {
+    const r = map[c.iso]; const t = r ? shiftOf(it, r.kind) : null;
+    return `<button class="sh-cell ${c.inMonth ? '' : 'out'} ${c.iso === today ? 'today' : ''} ${t ? 'sh-c' + t.color : ''}" data-action="shift-day" data-item="${it.id}" data-day="${c.iso}"
+      aria-label="${c.n} ${MONTHS_LONG[m - 1]}${t ? ': ' + esc(t.label) : ''}"><span class="d">${c.n}</span>${t ? `<span class="s">${esc(t.short)}</span>` : ''}${r?.note ? '<i class="nt"></i>' : ''}</button>`;
+  }).join('');
+  const counts = {};
+  Object.values(map).filter((r) => r.day.startsWith(ym)).forEach((r) => { counts[r.kind] = (counts[r.kind] || 0) + 1; });
+  const summary = Object.entries(counts).map(([k, n]) => { const t = shiftOf(it, k); return `<span class="sh-sum sh-c${t.color}"><b>${n}</b> ${esc(t.label)}</span>`; }).join('');
+  const painting = state.paint && (state.paint === '__erase' ? { label: 'gomma' } : shiftOf(it, state.paint));
+  const palette = readOnly() ? '' : `
+    <div class="sh-palette">
+      ${types.map((t) => `<button class="sh-chip sh-c${t.color} ${state.paint === t.id ? 'sel' : ''}" data-action="shift-paint" data-type="${t.id}"><b>${esc(t.short)}</b>${esc(t.label)}</button>`).join('')}
+      <button class="sh-chip erase ${state.paint === '__erase' ? 'sel' : ''}" data-action="shift-paint" data-type="__erase">${ic('trash')}Gomma</button>
+      <button class="sh-chip more" data-action="shift-types" data-id="${it.id}">${ic('sliders')}Tipi</button>
+    </div>
+    <p class="hint sh-hint">${painting ? (state.paint === '__erase' ? 'Tocca i giorni da svuotare.' : `Tocca i giorni da segnare come «${esc(painting.label)}».`) + ' Tocca di nuovo il tipo per smettere.' : 'Tocca un giorno per scegliere il turno. Oppure scegli un tipo qui sopra e poi tocca più giorni in fila.'}</p>`;
+  return `
+    <div class="card sh-card">
+      <div class="sh-nav">
+        <button class="icon-btn" data-action="shift-month" data-delta="-1" aria-label="Mese precedente">${ic('back')}</button>
+        <button class="sh-title" data-action="shift-month" data-delta="0">${MONTHS_LONG[m - 1]} ${y}</button>
+        <button class="icon-btn" data-action="shift-month" data-delta="1" aria-label="Mese successivo">${ic('next')}</button>
+      </div>
+      <div class="sh-week">${['L', 'M', 'M', 'G', 'V', 'S', 'D'].map((x) => `<span>${x}</span>`).join('')}</div>
+      <div class="sh-grid">${cells}</div>
+      ${summary ? `<div class="sh-sums">${summary}</div>` : ''}
+    </div>
+    ${palette}
+    <div class="actions row-actions">
+      ${readOnly() ? '' : `<button class="btn secondary" data-action="shift-cycle" data-id="${it.id}">${ic('repeat')}Ripeti un ciclo</button>`}
+      <button class="btn secondary" data-action="shift-print" data-id="${it.id}">${ic('printer')}Stampa</button>
+    </div>`;
+}
+
+function openShiftDay(itemId, iso) {
+  const it = byId(state.items, itemId); if (!it) return;
+  const row = state.shifts.find((x) => x.item_id === itemId && x.day === iso);
+  const d = fromISO(iso);
+  openSheet(`${DAYS_LONG[d.getDay()]} ${d.getDate()} ${MONTHS_LONG[d.getMonth()]}`, `
+    <div class="shift-pick">${shiftTypes(it).map((t) => `
+      <button class="sh-big sh-c${t.color} ${row?.kind === t.id ? 'sel' : ''}" data-action="shift-pick" data-item="${itemId}" data-day="${iso}" data-type="${t.id}">
+        <b>${esc(t.short)}</b><span>${esc(t.label)}${shiftHours(t) ? `<i>${shiftHours(t)}</i>` : ''}</span></button>`).join('')}</div>
+    <label>Nota (facoltativa)<input id="shift-note" maxlength="80" value="${esc(row?.note || '')}" placeholder="es. cambio con Anna"></label>
+    <p class="hint">Scegli il turno per salvare anche la nota.</p>
+    ${row ? `<div class="actions"><button class="btn danger" data-action="shift-clear" data-item="${itemId}" data-day="${iso}">${ic('trash')}Svuota questo giorno</button></div>` : ''}`);
+}
+
+// Tipi di turno: nome, sigla, colore, orario. I predefiniti si possono modificare o nascondere.
+function openShiftTypes(itemId) {
+  const it = byId(state.items, itemId); if (!it) return;
+  const rows = shiftTypes(it, true).map((t) => `
+    <button class="row ${t.hidden ? 'done' : ''}" data-action="edit-shift-type" data-item="${itemId}" data-type="${t.id}">
+      <span class="sh-chip sh-c${t.color}" style="pointer-events:none"><b>${esc(t.short)}</b></span>
+      <div class="main"><div class="t">${esc(t.label)}</div><div class="s">${shiftHours(t) || 'senza orario'}${t.hidden ? ' · nascosto' : ''}</div></div>
+      <span class="chev">${ic('pencil')}</span>
+    </button>`).join('');
+  openSheet('Tipi di turno', `<div class="list">${rows}</div>
+    <div class="actions"><button class="btn" data-action="new-shift-type" data-item="${itemId}">${ic('plus')}Aggiungi un tipo</button></div>`);
+}
+
+function openShiftTypeForm(itemId, typeId) {
+  const it = byId(state.items, itemId); if (!it) return;
+  const t = typeId ? shiftOf(it, typeId) : { label: '', short: '', color: 9, from: '', to: '' };
+  const isDefault = SHIFT_TYPES.some((d) => d.id === typeId);
+  openSheet(typeId ? 'Modifica tipo' : 'Nuovo tipo di turno', `
+    <form id="stype-form" data-item="${itemId}" data-type="${typeId || ''}">
+      <label>Nome<input name="label" required maxlength="24" value="${esc(t.label)}" placeholder="es. Reperibilità"></label>
+      <div class="row2">
+        <label>Sigla<input name="short" required maxlength="3" value="${esc(t.short)}" placeholder="es. Re"></label>
+        <label>Colore<input type="hidden" name="color" value="${t.color}">
+          <div class="swatches">${SHIFT_COLORS.slice(1).map((c) => `<button type="button" class="sw sh-c${c} ${c === t.color ? 'sel' : ''}" data-action="pick-color" data-color="${c}" aria-label="Colore ${c}"></button>`).join('')}</div></label>
+      </div>
+      <div class="row2">
+        <label>Dalle<input type="time" name="from" value="${t.from || ''}"></label>
+        <label>Alle<input type="time" name="to" value="${t.to || ''}"></label>
+      </div>
+      <div class="actions"><button class="btn" type="submit">Salva</button>
+        ${typeId && isDefault ? `<button type="button" class="btn secondary" data-action="toggle-shift-type" data-item="${itemId}" data-type="${typeId}">${t.hidden ? 'Mostra di nuovo' : 'Nascondi dalle scelte'}</button>` : ''}
+        ${typeId && !isDefault ? `<button type="button" class="btn danger" data-action="delete-shift-type" data-item="${itemId}" data-type="${typeId}">${ic('trash')}Elimina</button>` : ''}
+      </div>
+    </form>`);
+}
+
+async function onShiftTypeSubmit(form) {
+  const it = byId(state.items, form.dataset.item); if (!it) return;
+  const f = form.elements; const id = form.dataset.type || ('c_' + Date.now().toString(36));
+  const entry = { id, label: f.label.value.trim(), short: f.short.value.trim(), color: Number(f.color.value) || 9, from: f.from.value || '', to: f.to.value || '' };
+  const prev = it.details?.shiftTypes || [];
+  const old = prev.find((x) => x.id === id);
+  if (old?.hidden) entry.hidden = true;
+  const list = old ? prev.map((x) => (x.id === id ? entry : x)) : [...prev, entry];
+  if (await saveItem(it.id, { details: { ...(it.details || {}), shiftTypes: list } })) { openShiftTypes(it.id); render(); toast('Salvato'); }
+}
+
+// Ripeti un ciclo: es. Mattina, Pomeriggio, Notte, Riposo, Riposo per tutto il periodo scelto.
+let cycleSeq = [];
+const CYCLE_PRESETS = [
+  ['5 giorni + 2 di riposo', ['giornata', 'giornata', 'giornata', 'giornata', 'giornata', 'riposo', 'riposo']],
+  ['Mattina, Pomeriggio, Notte, 2 riposi', ['mattina', 'pomeriggio', 'notte', 'riposo', 'riposo']],
+];
+function cycleHTML(it) {
+  const ym = curYM(); const today = todayISO();
+  const start = today.startsWith(ym) ? today : ym + '-01';
+  return `
+    <form id="cycle-form" data-item="${it.id}">
+      <div class="flabel">1. Costruisci la sequenza, un giorno alla volta</div>
+      <div class="sh-palette">${shiftTypes(it).map((t) => `<button type="button" class="sh-chip sh-c${t.color}" data-action="cycle-add" data-item="${it.id}" data-type="${t.id}"><b>${esc(t.short)}</b>${esc(t.label)}</button>`).join('')}</div>
+      <div class="cycle-seq" id="cycle-seq">${cycleSeqHTML(it)}</div>
+      <div class="sugg">${CYCLE_PRESETS.map(([l], i) => `<button type="button" class="chip" data-action="cycle-preset" data-item="${it.id}" data-i="${i}">${esc(l)}</button>`).join('')}</div>
+      <div class="flabel">2. Da quando e per quanto</div>
+      <div class="row2">
+        <label>Primo giorno<input type="date" name="start" required value="${start}"></label>
+        <label>Per quanto<select name="span">
+          <option value="eom">Fino a fine mese</option><option value="4w">4 settimane</option><option value="8w">8 settimane</option>
+          <option value="3m">3 mesi</option><option value="6m">6 mesi</option></select></label>
+      </div>
+      <p class="hint">I giorni già compilati in quel periodo vengono sostituiti.</p>
+      <div class="actions"><button class="btn" type="submit">Applica</button></div>
+    </form>`;
+}
+const cycleSeqHTML = (it) => cycleSeq.length
+  ? `${cycleSeq.map((id) => { const t = shiftOf(it, id); return `<span class="sh-sum sh-c${t.color}"><b>${esc(t.short)}</b></span>`; }).join('<i>›</i>')}
+     <button type="button" class="chip" data-action="cycle-undo" data-item="${it.id}">Togli l'ultimo</button>`
+  : '<span class="hint" style="margin:0">Tocca i turni qui sopra nell\'ordine in cui si ripetono.</span>';
+function openShiftCycle(itemId) { const it = byId(state.items, itemId); if (!it) return; cycleSeq = []; openSheet('Ripeti un ciclo', cycleHTML(it)); }
+
+async function onCycleSubmit(form) {
+  const it = byId(state.items, form.dataset.item); if (!it) return;
+  if (!cycleSeq.length) { toast('Aggiungi almeno un turno alla sequenza.'); return; }
+  const start = form.elements.start.value, span = form.elements.span.value;
+  const s = fromISO(start);
+  let end;
+  if (span === 'eom') end = toISO(new Date(s.getFullYear(), s.getMonth() + 1, 0, 12));
+  else if (span.endsWith('w')) end = toISO(new Date(s.getFullYear(), s.getMonth(), s.getDate() + parseInt(span, 10) * 7 - 1, 12));
+  else end = toISO(new Date(s.getFullYear(), s.getMonth() + parseInt(span, 10), s.getDate() - 1, 12));
+  const entries = []; let i = 0;
+  for (let d = fromISO(start); toISO(d) <= end; d = new Date(d.getFullYear(), d.getMonth(), d.getDate() + 1, 12)) {
+    entries.push({ day: toISO(d), kind: cycleSeq[i % cycleSeq.length] }); i++;
+  }
+  if (applyShiftsBulk(it.id, entries)) { state.shiftMonth = start.slice(0, 7); closeSheetNow(); render(); toast(`${entries.length} giorni compilati`); }
+}
+
+/* --- stampa del mese --- */
+function printShifts(itemId) {
+  const it = byId(state.items, itemId); if (!it) return;
+  const ym = curYM(); const [y, m] = ym.split('-').map(Number);
+  const map = shiftMap(itemId);
+  const used = new Set(Object.values(map).filter((r) => r.day.startsWith(ym)).map((r) => r.kind));
+  const rows = [];
+  const cells = monthCells(ym);
+  for (let i = 0; i < cells.length; i += 7) {
+    rows.push(`<tr>${cells.slice(i, i + 7).map((c) => {
+      const r = c.inMonth ? map[c.iso] : null; const t = r ? shiftOf(it, r.kind) : null;
+      return `<td class="${c.inMonth ? '' : 'out'} ${t ? 'pr-c' + t.color : ''}"><span class="d">${c.n}</span>${t ? `<b>${esc(t.short)}</b><small>${esc(shiftHours(t))}</small>` : ''}${r?.note ? `<em>${esc(r.note)}</em>` : ''}</td>`;
+    }).join('')}</tr>`);
+  }
+  const legend = shiftTypes(it, true).filter((t) => used.has(t.id))
+    .map((t) => `<span class="pr-leg pr-c${t.color}"><b>${esc(t.short)}</b> ${esc(t.label)}${shiftHours(t) ? ' ' + shiftHours(t) : ''}</span>`).join('');
+  const counts = [...used].map((k) => `${Object.values(map).filter((r) => r.day.startsWith(ym) && r.kind === k).length} ${shiftOf(it, k).label.toLowerCase()}`).join(' · ');
+  let root = document.getElementById('print-root');
+  if (!root) { root = document.createElement('div'); root.id = 'print-root'; document.body.appendChild(root); }
+  root.innerHTML = `
+    <div class="pr-head"><h1>${esc(it.name)}</h1><div>${MONTHS_LONG[m - 1].charAt(0).toUpperCase() + MONTHS_LONG[m - 1].slice(1)} ${y}</div></div>
+    <table class="pr-grid"><thead><tr>${['Lunedì', 'Martedì', 'Mercoledì', 'Giovedì', 'Venerdì', 'Sabato', 'Domenica'].map((x) => `<th>${x}</th>`).join('')}</tr></thead><tbody>${rows.join('')}</tbody></table>
+    <div class="pr-legend">${legend || ''}</div>
+    ${counts ? `<div class="pr-sum">Riepilogo: ${esc(counts)}</div>` : ''}`;
+  setTimeout(() => window.print(), 80);
+}
+
+function shiftsTodayCard() {
+  const today = todayISO(); const tom = toISO(new Date(fromISO(today).getTime() + 86400000));
+  const rows = state.items.filter((i) => itemType(i).shifts).map((it) => {
+    const a = state.shifts.find((x) => x.item_id === it.id && x.day === today);
+    const b = state.shifts.find((x) => x.item_id === it.id && x.day === tom);
+    if (!a && !b) return '';
+    const part = (r, lbl) => { if (!r) return ''; const t = shiftOf(it, r.kind); return `<span class="sh-sum sh-c${t.color}"><b>${esc(t.short)}</b> ${lbl}: ${esc(t.label)}${shiftHours(t) ? ' ' + shiftHours(t) : ''}</span>`; };
+    return `<button class="row" data-action="open-item" data-id="${it.id}">${tile('briefcase', 'altro')}
+      <div class="main"><div class="t">${esc(it.name)}</div><div class="s sh-today">${part(a, 'oggi')}${part(b, 'domani')}</div></div><span class="chev">${ic('next')}</span></button>`;
+  }).join('');
+  return rows ? `<div class="group-title">Turni</div><div class="list">${rows}</div>` : '';
+}
+
+/* --- posta da confermare --- */
+const normPlate = (x) => String(x || '').replace(/[^A-Za-z0-9]/g, '').toUpperCase();
+function inboxMatch(r) {
+  const plate = normPlate(r.plate);
+  let item = plate ? state.items.find((i) => normPlate(i.details?.ident?.targa) === plate) : null;
+  if (!item && SECTIONS[r.kind]) {
+    const cands = state.items.filter((i) => (itemType(i).groups || []).some((g) => g.ids.includes(r.kind)));
+    if (cands.length === 1) item = cands[0];
+  }
+  const sid = item && SECTIONS[r.kind] && (itemType(item).groups || []).some((g) => g.ids.includes(r.kind)) ? r.kind : null;
+  return { item, sid };
+}
+
+function inboxCard() {
+  const list = state.inbox.filter((r) => r.status === 'new');
+  if (!list.length) return '';
+  const rows = list.slice(0, 5).map((r) => {
+    const m = inboxMatch(r);
+    const sub = [r.due_date ? fmtDate(r.due_date) : 'data da controllare', r.amount != null ? money(r.amount) : 'importo non indicato'].join(' · ');
+    return `<div class="inb">
+      <div class="inb-t">${esc(r.title || r.subject || 'Messaggio')}</div>
+      <div class="inb-s">${esc(sub)}</div>
+      <div class="inb-m">${m.item ? `Per: ${esc(m.item.name)}` : esc(r.sender || '')}${r.paid_hint ? ' · sembra un pagamento già fatto' : ''}</div>
+      <div class="inb-a">
+        ${r.link ? `<a class="chip" href="${esc(safeUrl(r.link))}" target="_blank" rel="noopener noreferrer">Apri la mail</a>` : ''}
+        ${readOnly() ? '' : `<button class="chip" data-action="inbox-skip" data-id="${r.id}">Scarta</button>
+        <button class="chip primary" data-action="${r.paid_hint ? 'inbox-paid' : 'inbox-add'}" data-id="${r.id}">${r.paid_hint ? 'Segna pagata' : 'Aggiungi'}</button>`}
+      </div>
+    </div>`;
+  }).join('');
+  return `<div class="group-title">Da confermare · ${list.length}</div><div class="card inbox">${rows}${list.length > 5 ? `<p class="hint">Altre ${list.length - 5} dopo queste.</p>` : ''}</div>`;
+}
+
+async function resolveInbox(id, status) {
+  const r = byId(state.inbox, id); if (!r) return true;
+  try { if (MODE === 'cloud') await store.update('inbox', id, { status }); state.inbox = state.inbox.filter((x) => x.id !== id); return true; }
+  catch (e) { fail(e); return false; }
+}
+
+function acceptInbox(id) {
+  const r = byId(state.inbox, id); if (!r) return;
+  const m = inboxMatch(r);
+  const note = [r.ref ? `Polizza/contratto n. ${r.ref}` : '', r.sender ? `Da: ${r.sender}` : ''].filter(Boolean).join(' · ');
+  if (m.item && m.sid) {
+    const S = SECTIONS[m.sid];
+    const dF = S.fields.find((f) => f.dl === 'date'), aF = S.fields.find((f) => f.dl === 'amount');
+    const prefill = { link: r.link || '' };
+    if (dF && r.due_date) prefill[dF.k] = r.due_date;
+    if (aF && r.amount != null) prefill[aF.k] = r.amount;
+    openSection(m.item.id, m.sid, { prefill, inbox: id });
+  } else {
+    openDeadlineForm(null, m.item?.id || null, { inbox: id, pre: { item_id: m.item?.id, kind: r.kind, due_date: r.due_date || '', amount: r.amount ?? '', note, link: r.link || '' } });
+  }
+}
+
+async function inboxPaid(id) {
+  const r = byId(state.inbox, id); if (!r) return;
+  const m = inboxMatch(r);
+  const dl = m.item && state.deadlines.find((d) => d.item_id === m.item.id && !d.paid && (m.sid ? d.section === m.sid : d.kind === r.kind));
+  if (dl) { await markPaid(dl.id); await resolveInbox(id, 'done'); render(); }
+  else { toast('Non trovo la scadenza da chiudere: la scarto.'); await resolveInbox(id, 'dismissed'); render(); }
+}
+
 /* --- pagina: Home --- */
 function pageHome() {
   if (!state.items.length) return { title: 'Scadenze', body: emptyStart(), fab: false };
@@ -482,16 +821,18 @@ function pageHome() {
   const open = state.deadlines.filter((d) => !d.paid);
   const late = open.filter((d) => d.due_date < today);
   const week = open.filter((d) => d.due_date >= today && diffDays(today, d.due_date) <= 7);
+  const todo = [...late, ...week];
   const month = open.filter((d) => diffDays(today, d.due_date) > 7 && diffDays(today, d.due_date) <= 30);
   const later = open.filter((d) => diffDays(today, d.due_date) > 30);
   const next30 = open.filter((d) => diffDays(today, d.due_date) <= 30);
   const sum30 = next30.reduce((s, d) => s + (Number(d.amount) || 0), 0);
+  const sumTodo = todo.reduce((s, d) => s + (Number(d.amount) || 0), 0);
 
   const hero = `
     <section class="hero">
-      <div class="label">Da pagare nei prossimi 30 giorni</div>
-      <div class="big">${eurFmt.format(sum30)}</div>
-      <div class="sub">${next30.length === 0 ? 'Nessuna scadenza in arrivo' : next30.length === 1 ? '1 scadenza' : next30.length + ' scadenze'}</div>
+      <div class="label">Da fare entro 7 giorni</div>
+      <div class="big">${todo.length ? todo.length + (todo.length === 1 ? ' cosa' : ' cose') : 'Niente'}</div>
+      <div class="sub">${todo.length ? (sumTodo ? eurFmt.format(sumTodo) + ' da pagare' : 'da controllare') : 'Puoi stare tranquillo questa settimana'}</div>
       ${late.length ? `<div class="alert">${ic('alert')}${late.length} ${late.length === 1 ? 'scaduta' : 'scadute'}</div>` : ''}
     </section>`;
 
@@ -508,11 +849,12 @@ function pageHome() {
 
   const group = (title, arr, cls = '') => arr.length
     ? `<div class="group-title ${cls}">${title}</div><div class="list">${arr.map((d) => rowDeadline(d)).join('')}</div>` : '';
-  const body = open.length
-    ? group('Scadute', late, 'late') + group('Questa settimana', week) + group('Entro 30 giorni', month) + group('Più avanti', later)
-    : `<div class="empty"><div class="big-ico ok">${ic('checkCircle')}</div><h3>Tutto in ordine</h3><p>Non c'è nessuna scadenza aperta. Aggiungine una con il pulsante in basso.</p></div>`;
+  const todoBlock = todo.length
+    ? `<div class="group-title ${late.length ? 'late' : ''}">Da fare questa settimana</div><div class="list">${todo.map((d) => rowDeadline(d)).join('')}</div>`
+    : `<div class="card soft done-card">${ic('checkCircle')}<div><div class="t">Tutto fatto per questa settimana</div><div class="hint" style="margin:0">${next30.length ? `Prossima scadenza ${relative(open[0].due_date)}.` : 'Nessuna scadenza in arrivo.'}</div></div></div>`;
+  const rest = open.length ? group('Entro 30 giorni', month) + group('Più avanti', later) : '';
 
-  return { title: 'Scadenze', body: hero + mini + body, fab: true };
+  return { title: 'Scadenze', body: hero + shiftsTodayCard() + inboxCard() + todoBlock + mini + rest, fab: true };
 }
 
 /* --- pagina: sezione (Casa / Mezzi / Altro) --- */
@@ -632,7 +974,7 @@ function pageItem(it) {
   const hidden = it.details?.hidden || [];
   const paid = state.deadlines.filter((d) => d.item_id === it.id && d.paid)
     .sort((a, b) => (b.paid_on || '').localeCompare(a.paid_on || '')).slice(0, 6);
-  let body = identityCard(it, t) + (sum.total ? heroCosts('Spesa prevista nei prossimi 12 mesi', sum.total) : '');
+  let body = identityCard(it, t) + (t.shifts ? shiftsBlock(it) : '') + (sum.total ? heroCosts('Spesa prevista nei prossimi 12 mesi', sum.total) : '');
 
   if (t.groups) {
     body += t.groups.map((g) => {
@@ -645,13 +987,14 @@ function pageItem(it) {
     if (extra.length) body += `<div class="group-title">Altre scadenze</div><div class="list">${extra.map((d) => rowDeadline(d, { hideItem: true })).join('')}</div>`;
   } else {
     const open = state.deadlines.filter((d) => d.item_id === it.id && !d.paid);
-    body += `<div class="group-title">Da pagare</div>` + (open.length
+    body += `<div class="group-title">${t.shifts ? 'Scadenze di lavoro' : 'Da pagare'}</div>` + (open.length
       ? `<div class="list">${open.map((d) => rowDeadline(d, { hideItem: true })).join('')}</div>`
       : `<div class="card soft"><p class="hint" style="margin:0">Ancora nessuna scadenza.</p></div>`);
     body += `<div class="actions"><button class="btn" data-action="new-deadline" data-item="${it.id}">${ic('plus')}${esc(t.addLabel || 'Aggiungi una scadenza')}</button></div>`;
     if (sum.total) body += barsCard(sum.months);
   }
   if (t.log) body += logsCard(it, t);
+  if (histRows(it.id).length) body += `<div class="actions"><button class="btn secondary" data-action="open-history" data-item="${it.id}">${ic('chart')}Storico dei pagamenti (${histRows(it.id).length})</button></div>`;
   if (paid.length) body += `<div class="group-title">Pagate di recente</div><div class="list">${paid.map((d) => rowDeadline(d, { hideItem: true })).join('')}</div>`;
   if (sum.missing && t.groups) body += `<p class="hint">${sum.missing} ${sum.missing === 1 ? 'scadenza non ha' : 'scadenze non hanno'} un importo e non ${sum.missing === 1 ? 'è inclusa' : 'sono incluse'} nei conteggi.</p>`;
   return { title: it.name, body, fab: !!t.groups, fabItem: it.id };
@@ -671,6 +1014,13 @@ function openSheet(title, body, opts = {}) {
     </div>`;
   document.body.style.overflow = 'hidden';
   sheetOpen = true;
+  if (readOnly()) {
+    sheetRoot.querySelectorAll('form').forEach((f) => {
+      f.querySelectorAll('input:not([type=hidden]), select, textarea').forEach((e) => { e.disabled = true; });
+      f.querySelectorAll('.actions button, .sugg, .paste, [data-action=pick-type], [data-action=pick-kind]').forEach((e) => e.remove());
+      f.insertAdjacentHTML('afterbegin', `<div class="banner">${ic('info')}<span>Sola lettura: puoi guardare ma non modificare.</span></div>`);
+    });
+  }
   if (!opts.noSwipe) enableSwipe($('.sheet', sheetRoot));
 }
 
@@ -722,7 +1072,7 @@ function enableSwipe(sheet) {
 }
 
 // Conferma nello stile dell'app (al posto di confirm del browser).
-function confirmDialog({ title, text, ok = 'Conferma', danger = false }) {
+function confirmDialog({ title, text, ok = 'Conferma', cancel = 'Annulla', danger = false }) {
   return new Promise((resolve) => {
     const el = document.createElement('div');
     el.className = 'dlg-wrap';
@@ -731,7 +1081,7 @@ function confirmDialog({ title, text, ok = 'Conferma', danger = false }) {
       <div class="dlg" role="alertdialog" aria-modal="true" aria-label="${esc(title)}">
         <h3>${esc(title)}</h3><p>${esc(text || '')}</p>
         <div class="dlg-actions">
-          <button class="btn secondary" data-v="0">Annulla</button>
+          <button class="btn secondary" data-v="0">${esc(cancel)}</button>
           <button class="btn ${danger ? 'danger-solid' : ''}" data-v="1">${esc(ok)}</button>
         </div>
       </div>`;
@@ -752,12 +1102,13 @@ function kindGrid(item, selected) {
     `<button type="button" class="kind ${k.id === selected ? 'sel' : ''}" data-action="pick-kind" data-kind="${k.id}">${ic(k.icon)}<span>${k.label}</span></button>`).join('');
 }
 
-function openDeadlineForm(id, presetItemId) {
+function openDeadlineForm(id, presetItemId, opts = {}) {
   if (!state.items.length) { openItemForm(null, 'casa'); return; }
   const dl = id ? byId(state.deadlines, id) : null;
-  const itemId = dl?.item_id || presetItemId || state.items[0].id;
+  const pre = opts.pre || {};
+  const itemId = dl?.item_id || pre.item_id || presetItemId || state.items[0].id;
   const item = byId(state.items, itemId);
-  const kind = dl?.kind || kindsFor(item)[0].id;
+  const kind = dl?.kind || (pre.kind && kindsFor(item).some((x) => x.id === pre.kind) ? pre.kind : kindsFor(item)[0].id);
   const k = kindOf(kind);
   const lock = !!presetItemId || !!dl || state.items.length === 1;
 
@@ -767,20 +1118,21 @@ function openDeadlineForm(id, presetItemId) {
   const recOpts = Object.entries(REC).map(([v, r]) => `<option value="${v}" ${(dl?.recurrence || k.rec) === v ? 'selected' : ''}>${r.label}</option>`).join('');
 
   openSheet(dl ? 'Modifica scadenza' : 'Nuova scadenza', `
-    <form id="dl-form" data-id="${dl?.id || ''}">
+    <form id="dl-form" data-id="${dl?.id || ''}" ${opts.inbox ? `data-inbox="${opts.inbox}"` : ''}>
       ${itemField}
       <div class="flabel">Che cosa?</div>
       <div class="kinds" id="kind-grid">${kindGrid(item, kind)}</div>
       <input type="hidden" name="kind" value="${kind}">
       <div class="row2">
-        <label>Scadenza<input type="date" name="due_date" required value="${dl?.due_date || ''}"></label>
-        <label>Importo (€)<input type="number" name="amount" step="0.01" min="0" inputmode="decimal" placeholder="se lo sai" value="${dl?.amount ?? ''}"></label>
+        <label>Scadenza<input type="date" name="due_date" required value="${dl?.due_date || pre.due_date || ''}"></label>
+        <label>Importo (€)<input type="number" name="amount" step="0.01" min="0" inputmode="decimal" placeholder="se lo sai" value="${dl?.amount ?? pre.amount ?? ''}"></label>
       </div>
       <label>Si ripete<select name="recurrence">${recOpts}</select></label>
-      <details class="more">
+      <details class="more" ${pre.link || pre.note || dl?.link ? 'open' : ''}>
         <summary>Altre opzioni</summary>
         <label>Nome<input name="title" value="${esc(dl?.title || k.label)}" required></label>
-        <label>Note<textarea name="note" rows="2" placeholder="Numero polizza, contratto…">${esc(dl?.note || '')}</textarea></label>
+        <label>Note<textarea name="note" rows="2" placeholder="Numero polizza, contratto…">${esc(dl?.note ?? pre.note ?? '')}</textarea></label>
+        ${fieldHTML(LINK_FIELD, dl?.link ?? pre.link)}${linkBtn(dl?.link ?? pre.link)}
         ${dl ? '' : `
         <div class="paste">
           <div class="flabel">Compila da un'email</div>
@@ -826,11 +1178,13 @@ async function onDeadlineSubmit(form) {
     item_id: f.item_id.value, kind: f.kind.value, title: f.title.value.trim() || kindOf(f.kind.value).label,
     due_date: f.due_date.value, amount: f.amount.value === '' ? null : Number(f.amount.value),
     recurrence: f.recurrence.value, note: f.note.value.trim() || null,
+    link: f.link.value.trim() ? safeUrl(f.link.value) : null,
   };
+  if (f.link.value.trim() && !fields.link) { toast('Il link non è valido: deve iniziare con https://'); return; }
   if (!fields.due_date) { toast('Manca la data di scadenza'); return; }
   if (!id) fields.paid = false;
   const ok = await saveDeadline(id, fields);
-  if (ok) { closeSheetNow(); render(); toast(id ? 'Salvato' : 'Scadenza aggiunta'); }
+  if (ok) { if (form.dataset.inbox) await resolveInbox(form.dataset.inbox, 'done'); closeSheetNow(); render(); toast(id ? 'Salvato' : 'Scadenza aggiunta'); }
 }
 
 /* --- incolla email --- */
@@ -1020,6 +1374,99 @@ async function onIdentSubmit(form) {
   return !!(await saveItem(it.id, patch));
 }
 
+/* --- storico dei pagamenti (le scadenze pagate non si cancellano mai) --- */
+const histRows = (itemId, sid) => state.deadlines
+  .filter((d) => d.item_id === itemId && d.paid && (!sid || d.section === sid))
+  .sort((a, b) => a.due_date.localeCompare(b.due_date));
+
+function histChart(rows) {
+  const pts = rows.filter((r) => r.amount != null && Number(r.amount) > 0).slice(-10);
+  if (pts.length < 2) return '';
+  const first = pts[0].due_date, last = pts[pts.length - 1].due_date;
+  const yearly = (monthsBetween(first, last) / (pts.length - 1)) >= 6;
+  const labelOf = (d) => { const x = fromISO(d); return yearly ? String(x.getFullYear()) : `${MONTHS_SHORT[x.getMonth()]} ${String(x.getFullYear()).slice(2)}`; };
+  const W = 320, H = 168, padT = 22, padB = 24, padX = 10;
+  const max = Math.max(...pts.map((r) => Number(r.amount)));
+  const bw = Math.min(40, (W - padX * 2) / pts.length - 8);
+  const step = (W - padX * 2) / pts.length;
+  const bars = pts.map((r, i) => {
+    const v = Number(r.amount), h = Math.max(3, (v / max) * (H - padT - padB));
+    const x = padX + step * i + (step - bw) / 2, y = H - padB - h;
+    const lbl = v >= 1000 ? (v / 1000).toFixed(1).replace('.', ',') + 'k' : String(Math.round(v));
+    return `<g><rect class="hc-bar ${i === pts.length - 1 ? 'last' : ''}" x="${x.toFixed(1)}" y="${y.toFixed(1)}" width="${bw.toFixed(1)}" height="${h.toFixed(1)}" rx="5"/>
+      <text class="hc-v" x="${(x + bw / 2).toFixed(1)}" y="${(y - 6).toFixed(1)}" text-anchor="middle">${lbl}</text>
+      <text class="hc-x" x="${(x + bw / 2).toFixed(1)}" y="${H - 8}" text-anchor="middle">${esc(labelOf(r.due_date))}</text></g>`;
+  }).join('');
+  return `<svg class="hchart" viewBox="0 0 ${W} ${H}" role="img" aria-label="Andamento dei pagamenti">
+    <line class="hc-base" x1="${padX}" x2="${W - padX}" y1="${H - padB}" y2="${H - padB}"/>${bars}</svg>`;
+}
+
+function histStats(rows) {
+  const pts = rows.filter((r) => r.amount != null && Number(r.amount) > 0);
+  if (!pts.length) return '';
+  const last = Number(pts[pts.length - 1].amount);
+  const total = pts.reduce((n, r) => n + Number(r.amount), 0);
+  let delta = '';
+  if (pts.length > 1) {
+    const prev = Number(pts[pts.length - 2].amount); const pc = Math.round(((last - prev) / prev) * 100);
+    delta = pc === 0 ? 'Uguale al precedente' : `<span class="${pc > 0 ? 'up' : 'down'}">${pc > 0 ? '+' : ''}${pc}%</span> rispetto al precedente`;
+  }
+  return `<div class="hstats">
+    <div><i>Ultimo</i><b>${money(last)}</b></div>
+    <div><i>Media</i><b>${money(total / pts.length)}</b></div>
+    <div><i>Totale</i><b>${money(total)}</b></div>
+  </div>${delta ? `<p class="hint hdelta">${delta}</p>` : ''}`;
+}
+
+function openHistory(itemId, sid) {
+  const it = byId(state.items, itemId); if (!it) return;
+  const S = sid ? SECTIONS[sid] : null;
+  const rows = histRows(itemId, sid);
+  const t = itemType(it);
+  const title = S ? `Storico · ${S.title}` : 'Storico dei pagamenti';
+  const list = [...rows].reverse().map((d) => `
+    <div class="row" data-action="edit-history" data-id="${d.id}" role="button" tabindex="0">
+      ${tile((SECTIONS[d.section]?.icon) || kindOf(d.kind).icon, it.category)}
+      <div class="main"><div class="t">${esc(sid ? fmtDate(d.due_date) : d.title)}</div>
+        <div class="s">${sid ? '' : fmtDate(d.due_date) + ' · '}${d.paid_on ? 'pagata il ' + fmtDate(d.paid_on) : 'pagata'}${d.link ? ' · con documento' : ''}</div></div>
+      <div class="right"><div class="amt">${money(d.amount) || '—'}</div></div>
+    </div>`).join('');
+  openSheet(title, `
+    ${rows.length ? `<div class="card">${histChart(rows) || '<p class="hint" style="margin:0">Il grafico compare con almeno due pagamenti con importo.</p>'}${histStats(rows)}</div>` : ''}
+    ${rows.length ? `<div class="group-title">Tutti i pagamenti</div><div class="list">${list}</div>`
+      : `<div class="card soft"><p class="hint" style="margin:0">Qui compaiono i pagamenti già fatti. Quando premi ✓ su una scadenza finisce qui da sola.${S ? ' Puoi anche aggiungere quelli passati.' : ''}</p></div>`}
+    ${S && !readOnly() ? `<div class="actions"><button class="btn" data-action="new-history" data-item="${itemId}" data-sec="${sid}">${ic('plus')}Aggiungi un pagamento passato</button></div>` : ''}
+    <p class="hint">${esc(t.label || '')}</p>`);
+}
+
+function openHistoryEntry(itemId, sid, id) {
+  const it = byId(state.items, itemId); if (!it) return;
+  const S = sid ? SECTIONS[sid] : null;
+  const d = id ? byId(state.deadlines, id) : null;
+  openSheet(d ? 'Modifica pagamento' : 'Pagamento passato', `
+    <form id="hist-form" data-item="${itemId}" data-sec="${sid || ''}" data-id="${d?.id || ''}">
+      <div class="row2">
+        <label>Scadenza<input type="date" name="due" required value="${d?.due_date || ''}"></label>
+        <label>Pagata il<input type="date" name="paid" value="${d?.paid_on || ''}"></label>
+      </div>
+      <label>Importo (€)<input type="number" name="amount" step="0.01" min="0" inputmode="decimal" placeholder="se lo sai" value="${d?.amount ?? ''}"></label>
+      ${fieldHTML(LINK_FIELD, d?.link)}${linkBtn(d?.link)}
+      <div class="actions"><button class="btn" type="submit">Salva</button>
+        ${d ? `<button type="button" class="btn danger" data-action="delete-history" data-id="${d.id}">${ic('trash')}Elimina</button>` : ''}</div>
+    </form>`);
+}
+
+async function onHistorySubmit(form) {
+  const f = form.elements; const itemId = form.dataset.item; const sid = form.dataset.sec || null; const id = form.dataset.id || null;
+  const link = f.link.value.trim() ? safeUrl(f.link.value) : null;
+  if (f.link.value.trim() && !link) { toast('Il link non è valido: deve iniziare con https://'); return; }
+  const base = { due_date: f.due.value, paid_on: f.paid.value || f.due.value, amount: f.amount.value === '' ? null : Number(f.amount.value), link };
+  const S = sid ? SECTIONS[sid] : null;
+  const fields = id ? base : { ...base, item_id: itemId, section: sid, kind: S?.kind || 'altro', title: S?.title || 'Pagamento', recurrence: 'none', paid: true, note: null, until: null };
+  if (!(await saveDeadline(id, fields))) return;
+  openHistory(itemId, sid); render(); toast('Salvato');
+}
+
 /* --- schede (assicurazione, bollo, revisione, bollette…) --- */
 const secTouched = {};
 function monthsBetween(a, b) { const x = fromISO(a), y = fromISO(b); return (y.getFullYear() - x.getFullYear()) * 12 + (y.getMonth() - x.getMonth()); }
@@ -1044,6 +1491,7 @@ function openSection(itemId, sid, opts = {}) {
   const it = byId(state.items, itemId); const S = SECTIONS[sid];
   if (!it || !S) return;
   const saved = sectionValues(it, sid);
+  if (opts.prefill) Object.assign(saved, opts.prefill);
   const ident = it.details?.ident || {};
   Object.keys(secTouched).forEach((k) => delete secTouched[k]);
   for (const f of S.fields) if (f.auto) {
@@ -1056,15 +1504,16 @@ function openSection(itemId, sid, opts = {}) {
   const hasData = !!openDl(it.id, sid) || Object.keys((it.details?.s || {})[sid] || {}).length > 0;
   const last = opts.seq && opts.seq.i === opts.seq.ids.length - 1;
   openSheet(S.title, `
-    <form id="sec-form" data-item="${it.id}" data-sec="${sid}">
+    <form id="sec-form" data-item="${it.id}" data-sec="${sid}" ${opts.inbox ? `data-inbox="${opts.inbox}"` : ''}>
       ${opts.seq ? `<p class="hint step">Passo ${opts.seq.i + 1} di ${opts.seq.ids.length}</p>` : ''}
       ${S.intro ? `<div class="intro">${ic('info')}<span>${esc(S.intro)}</span></div>` : ''}
       ${gateField ? fieldHTML(gateField, saved[gateField.k]) : ''}
-      <div id="gated" ${gateOff ? 'hidden' : ''}>${fieldsHTML(rest, saved)}</div>
+      <div id="gated" ${gateOff ? 'hidden' : ''}>${fieldsHTML(rest, saved)}${fieldHTML(LINK_FIELD, saved.link)}${linkBtn(saved.link)}</div>
       <div class="actions">
         <button class="btn" type="submit">${opts.seq ? (last ? 'Salva e finisci' : 'Salva e continua') : 'Salva'}</button>
         ${opts.seq ? '<button type="button" class="btn secondary" data-action="seq-skip">Salta</button>'
-          : `<button type="button" class="btn danger" data-action="hide-section" data-item="${it.id}" data-sec="${sid}">${ic('trash')}${hasData ? 'Cancella e nascondi' : 'Non mi serve, nascondi'}</button>`}
+          : `<button type="button" class="btn secondary" data-action="open-history" data-item="${it.id}" data-sec="${sid}">${ic('history')}Storico${histRows(it.id, sid).length ? ` (${histRows(it.id, sid).length})` : ''}</button>
+             <button type="button" class="btn danger" data-action="hide-section" data-item="${it.id}" data-sec="${sid}">${ic('trash')}${hasData ? 'Cancella e nascondi' : 'Non mi serve, nascondi'}</button>`}
       </div>
     </form>`, { noAnim: !!opts.noAnim });
 }
@@ -1088,7 +1537,8 @@ function onSecFormInput(e) {
 async function onSectionSubmit(form) {
   const it = byId(state.items, form.dataset.item); const sid = form.dataset.sec; const S = SECTIONS[sid];
   if (!it || !S) return false;
-  const vals = readFields(form, S.fields);
+  const vals = readFields(form, [...S.fields, LINK_FIELD]);
+  if (vals.link) { vals.link = safeUrl(vals.link); if (!vals.link) { toast('Il link non è valido: deve iniziare con https://'); return false; } }
   const gateOff = !!(S.gate && vals[S.gate.k] === S.gate.off);
   const dF = S.fields.find((f) => f.dl === 'date'), aF = S.fields.find((f) => f.dl === 'amount'), rF = S.fields.find((f) => f.dl === 'rec');
   const date = !gateOff && dF ? vals[dF.k] : null;
@@ -1103,6 +1553,17 @@ async function onSectionSubmit(form) {
   if (!(await saveItem(it.id, { details }))) return false;
 
   const open = openDl(it.id, sid);
+  if (open && date && !finished && date > open.due_date) {
+    const paid = await confirmDialog({
+      title: 'La scadenza precedente è stata pagata?',
+      text: `Quella del ${fmtDate(open.due_date)}${open.amount != null ? ` (${money(open.amount)})` : ''}. Se sì, la conservo nello storico così non va persa.`,
+      ok: 'Sì, salvala nello storico', cancel: 'No, correggo solo',
+    });
+    if (paid) {
+      await saveDeadline(null, { item_id: it.id, section: sid, kind: S.kind, title: S.title, due_date: open.due_date, amount: open.amount ?? null,
+        recurrence: 'none', paid: true, paid_on: todayISO(), note: null, until: null, link: open.link || null });
+    }
+  }
   if (!date || finished) { if (open && !(await deleteDeadline(open.id))) return false; }
   else {
     const fields = { item_id: it.id, section: sid, kind: S.kind, title: S.title, due_date: date, amount, recurrence: rec, until, note: null };
@@ -1179,6 +1640,7 @@ function openLogForm(itemId, logId) {
         <label>${vehicle ? 'Officina' : 'Ditta o persona'}<input name="place" value="${esc(lg?.place || '')}" autocomplete="off"></label>
       </div>
       <label>Note<textarea name="note" rows="2">${esc(lg?.note || '')}</textarea></label>
+      ${fieldHTML(LINK_FIELD, lg?.link)}${linkBtn(lg?.link)}
       <div class="actions">
         <button class="btn" type="submit">Salva</button>
         ${lg ? `<button type="button" class="btn danger" data-action="delete-log" data-id="${lg.id}">${ic('trash')}Elimina</button>` : ''}
@@ -1193,7 +1655,9 @@ async function onLogSubmit(form) {
   const fields = {
     item_id: it.id, kind: f.kind ? f.kind.value : 'lavoro', title: f.title.value.trim(), done_on: f.done_on.value,
     km, amount: f.amount.value === '' ? null : Number(f.amount.value), place: f.place.value.trim() || null, note: f.note.value.trim() || null,
+    link: f.link.value.trim() ? safeUrl(f.link.value) : null,
   };
+  if (f.link.value.trim() && !fields.link) { toast('Il link non è valido: deve iniziare con https://'); return; }
   if (!(await saveLog(id, fields))) return;
   // i chilometri attuali del mezzo seguono l'ultimo lavoro registrato
   if (km && km > (it.details?.ident?.km || 0)) await saveItem(it.id, { details: { ...(it.details || {}), ident: { ...(it.details?.ident || {}), km } } });
@@ -1213,25 +1677,58 @@ function openItemMenu(id) {
 }
 
 /* --- impostazioni --- */
-function inviteText() {
-  return `Ti invito nel nostro Scadenziario! Apri ${location.origin}, crea un account e inserisci questo codice: ${state.household?.invite_code}`;
+function inviteText(kind) {
+  const code = kind === 'view' ? state.invites?.invite_code_view : state.invites?.invite_code;
+  return `Ti invito nel nostro Scadenziario! Apri ${location.origin}, crea un account e inserisci questo codice: ${code}`;
+}
+
+function membersCard() {
+  const owner = state.role === 'owner';
+  const rows = state.memberList.map((m) => {
+    const me = m.user_id === state.user?.id;
+    return `<div class="mrow">
+      <div class="mmain"><div class="t">${esc(m.email || 'Persona')}${me ? ' (tu)' : ''}</div><div class="s">${ROLE_LABEL[m.role] || m.role}</div></div>
+      ${owner && !me && m.role !== 'owner' ? `<div class="mact">
+        <button class="chip" data-action="member-role" data-user="${m.user_id}" data-role="${m.role === 'viewer' ? 'member' : 'viewer'}">${m.role === 'viewer' ? 'Può modificare' : 'Solo lettura'}</button>
+        <button class="chip danger" data-action="member-remove" data-user="${m.user_id}" data-email="${esc(m.email || '')}">Rimuovi</button></div>` : ''}
+    </div>`;
+  }).join('');
+  return `<div class="group-title">Persone</div><div class="card soft">${rows || '<p class="hint" style="margin:0">Ci sei solo tu, per ora.</p>'}</div>`;
+}
+
+function inviteBlock(kind, title, text) {
+  const code = kind === 'view' ? state.invites?.invite_code_view : state.invites?.invite_code;
+  return `<div class="invite">
+    <div class="t">${title}</div><div class="hint" style="margin:2px 0 8px">${text}</div>
+    <div class="code">${esc(code || '—')}</div>
+    <div class="two-btn">
+      <button class="btn secondary" data-action="copy-code" data-kind="${kind}">${ic('copy')}Copia</button>
+      <button class="btn" data-action="share-code" data-kind="${kind}">${ic('share')}Invia</button>
+    </div>
+    <button class="link" data-action="new-code" data-kind="${kind}">Genera un nuovo codice</button>
+  </div>`;
 }
 
 function openSettings() {
   const open = state.deadlines.filter((d) => !d.paid).length;
-  const hh = state.household;
-  const space = MODE === 'cloud' && hh ? `
+  const hh = state.household; const owner = state.role === 'owner';
+  const cloud = MODE === 'cloud' && hh;
+  const space = cloud ? `
     <div class="card soft">
       <div class="space-head">${ic('users')}<div><div class="t">${esc(hh.name)}</div>
-        <div class="hint">${state.members === 1 ? 'Ci sei solo tu, per ora' : state.members + ' persone condividono questi dati'}</div></div></div>
-      <div class="hint" style="margin:12px 0 6px">Per condividere le scadenze con un'altra persona, dalle questo codice. Dovrà creare un account e inserirlo.</div>
-      <div class="code" id="invite-code">${esc(hh.invite_code)}</div>
-      <div class="two-btn">
-        <button class="btn secondary" data-action="copy-code">${ic('copy')}Copia</button>
-        <button class="btn" data-action="share-code">${ic('share')}Invia</button>
-      </div>
-      <button class="link" data-action="new-code">Genera un nuovo codice (il vecchio smette di funzionare)</button>
-    </div>`
+        <div class="hint">${state.members === 1 ? 'Ci sei solo tu, per ora' : state.members + ' persone condividono questi dati'} · ${ROLE_LABEL[state.role] || ''}</div></div></div>
+    </div>
+    ${membersCard()}
+    ${owner && state.invites ? `<div class="group-title">Invita qualcuno</div><div class="card soft">
+      ${inviteBlock('edit', 'Può modificare', 'Per i tuoi genitori e chi gestisce le scadenze con te.')}
+      <hr class="sep">
+      ${inviteBlock('view', 'Solo lettura', 'Per chi deve solo vedere le scadenze, per esempio i figli.')}
+    </div>
+    <details class="more adv"><summary>Posta automatica (avanzate)</summary>
+      <p class="hint">Serve per collegare lo script di Gmail. La chiave va incollata solo nello script: chi la ha può inviare proposte all'app.</p>
+      <div class="two-btn"><button class="btn secondary" data-action="copy-token">${ic('copy')}Copia la chiave</button>
+      <button class="btn secondary" data-action="new-token">Nuova chiave</button></div>
+    </details>` : ''}`
     : (MODE === 'local' ? `<div class="banner">${ic('info')}<span>Modalità prova: i dati restano solo su questo dispositivo.</span></div>` : '');
 
   openSheet('Impostazioni', `
@@ -1240,7 +1737,7 @@ function openSettings() {
     <div class="menu" style="margin-top:8px">
       <button data-action="export-ics" ${open ? '' : 'disabled'}>${ic('calendar')}<span>Metti le scadenze nel calendario</span></button>
       <button data-action="export-json">${ic('download')}<span>Scarica una copia dei dati</span></button>
-      <label class="menu-file">${ic('upload')}<span>Importa una copia dei dati</span><input type="file" id="import-file" accept="application/json,.json" hidden></label>
+      ${readOnly() ? '' : `<label class="menu-file">${ic('upload')}<span>Importa una copia dei dati</span><input type="file" id="import-file" accept="application/json,.json" hidden></label>`}
       ${MODE === 'cloud' ? `<button class="danger" data-action="logout">${ic('logout')}<span>Esci</span></button>` : ''}
     </div>`);
 }
@@ -1295,6 +1792,10 @@ async function importJSON(file) {
         item_id: map[l.item_id], kind: l.kind || 'lavoro', title: l.title, done_on: l.done_on, km: l.km ?? null,
         amount: l.amount ?? null, place: l.place || null, note: l.note || null,
       }));
+    }
+    for (const sh of (data.shifts || [])) {
+      if (!map[sh.item_id]) continue;
+      state.shifts.push(await store.insert('shifts', { item_id: map[sh.item_id], day: sh.day, kind: sh.kind, note: sh.note || null }));
     }
     sortDeadlines(); closeSheetNow(); render();
     toast(`Importati ${data.items.length} elementi e ${data.deadlines.length} scadenze`);
@@ -1423,11 +1924,13 @@ async function onJoinHousehold(form) {
 }
 
 /* ---------- eventi ---------- */
+const WRITE_ACTIONS = new Set(['shift-day', 'shift-paint', 'shift-pick', 'shift-clear', 'shift-types', 'shift-cycle', 'new-shift-type', 'edit-shift-type', 'new-history', 'delete-history', 'new-deadline', 'new-item', 'new-log', 'edit-item', 'delete-item', 'hide-section', 'unhide-section', 'delete-deadline', 'delete-log', 'pay-form', 'reopen-form', 'inbox-add', 'inbox-paid', 'inbox-skip']);
 document.addEventListener('click', async (e) => {
   const el = e.target.closest('[data-action]');
   if (!el) return;
   const a = el.dataset.action; const id = el.dataset.id;
   if (a === 'pay') { e.stopPropagation(); markPaid(id); return; }
+  if (readOnly() && WRITE_ACTIONS.has(a)) { toast('Hai accesso in sola lettura: non puoi modificare.'); return; }
 
   switch (a) {
     case 'tab': state.tab = el.dataset.tab; state.itemId = null; render(); window.scrollTo(0, 0); break;
@@ -1440,6 +1943,49 @@ document.addEventListener('click', async (e) => {
       break;
     }
     case 'open-section': openSection(el.dataset.item, el.dataset.sec); break;
+    case 'shift-month': { const d = Number(el.dataset.delta); const [y, m] = curYM().split('-').map(Number); state.shiftMonth = d === 0 ? todayISO().slice(0, 7) : toISO(new Date(y, m - 1 + d, 1, 12)).slice(0, 7); render(); break; }
+    case 'shift-paint': state.paint = state.paint === el.dataset.type ? null : el.dataset.type; render(); break;
+    case 'shift-day': {
+      if (state.paint) { if (applyShift(el.dataset.item, el.dataset.day, state.paint === '__erase' ? null : state.paint)) render(); }
+      else openShiftDay(el.dataset.item, el.dataset.day);
+      break;
+    }
+    case 'shift-pick': if (applyShift(el.dataset.item, el.dataset.day, el.dataset.type, ($('#shift-note')?.value || '').trim())) { closeSheetNow(); render(); } break;
+    case 'shift-clear': if (applyShift(el.dataset.item, el.dataset.day, null)) { closeSheetNow(); render(); } break;
+    case 'shift-types': openShiftTypes(id); break;
+    case 'new-shift-type': openShiftTypeForm(el.dataset.item, null); break;
+    case 'edit-shift-type': openShiftTypeForm(el.dataset.item, el.dataset.type); break;
+    case 'pick-color': { const f = el.closest('form'); f.elements.color.value = el.dataset.color; f.querySelectorAll('.sw').forEach((b) => b.classList.toggle('sel', b === el)); break; }
+    case 'toggle-shift-type': {
+      const it = byId(state.items, el.dataset.item); const cur = shiftOf(it, el.dataset.type);
+      const prev = it.details?.shiftTypes || []; const entry = { ...cur, hidden: !cur.hidden }; delete entry.custom;
+      const list = prev.some((x) => x.id === cur.id) ? prev.map((x) => (x.id === cur.id ? entry : x)) : [...prev, entry];
+      if (await saveItem(it.id, { details: { ...(it.details || {}), shiftTypes: list } })) { openShiftTypes(it.id); render(); }
+      break;
+    }
+    case 'delete-shift-type': {
+      const it = byId(state.items, el.dataset.item);
+      const used = state.shifts.filter((x) => x.item_id === it.id && x.kind === el.dataset.type).length;
+      if (await confirmDialog({ title: 'Eliminare questo tipo?', text: used ? `È usato in ${used} giorni: resteranno segnati con una sigla senza nome.` : 'Non è usato in nessun giorno.', ok: 'Elimina', danger: true })) {
+        if (await saveItem(it.id, { details: { ...(it.details || {}), shiftTypes: (it.details?.shiftTypes || []).filter((x) => x.id !== el.dataset.type) } })) { openShiftTypes(it.id); render(); }
+      }
+      break;
+    }
+    case 'shift-cycle': openShiftCycle(id); break;
+    case 'cycle-add': { cycleSeq.push(el.dataset.type); $('#cycle-seq').innerHTML = cycleSeqHTML(byId(state.items, el.dataset.item)); break; }
+    case 'cycle-undo': { cycleSeq.pop(); $('#cycle-seq').innerHTML = cycleSeqHTML(byId(state.items, el.dataset.item)); break; }
+    case 'cycle-preset': { cycleSeq = [...CYCLE_PRESETS[Number(el.dataset.i)][1]]; $('#cycle-seq').innerHTML = cycleSeqHTML(byId(state.items, el.dataset.item)); break; }
+    case 'shift-print': printShifts(id); break;
+    case 'open-history': openHistory(el.dataset.item, el.dataset.sec || null); break;
+    case 'new-history': openHistoryEntry(el.dataset.item, el.dataset.sec || null, null); break;
+    case 'edit-history': { const d = byId(state.deadlines, id); if (d) openHistoryEntry(d.item_id, d.section || null, id); break; }
+    case 'delete-history': {
+      const d = byId(state.deadlines, id);
+      if (d && await confirmDialog({ title: 'Eliminare questo pagamento?', text: 'Sparirà dallo storico.', ok: 'Elimina', danger: true })) {
+        if (await deleteDeadline(id)) { openHistory(d.item_id, d.section || null); render(); toast('Eliminato'); }
+      }
+      break;
+    }
     case 'edit-ident': openIdentity(id); break;
     case 'pick-type': setItemType($('#item-form'), el.dataset.type); break;
     case 'seq-skip': advanceSeq(); break;
@@ -1491,23 +2037,47 @@ document.addEventListener('click', async (e) => {
       break;
     }
     case 'export-ics': exportICS(); break;
-    case 'export-json': download('scadenziario-backup.json', 'application/json', JSON.stringify({ items: state.items, deadlines: state.deadlines, item_logs: state.logs }, null, 2)); break;
-    case 'copy-code': try { await navigator.clipboard.writeText(state.household.invite_code); toast('Codice copiato'); } catch { toast('Copia non riuscita: scrivilo a mano'); } break;
-    case 'share-code':
-      if (navigator.share) { try { await navigator.share({ title: 'Scadenziario', text: inviteText() }); } catch {} }
-      else { try { await navigator.clipboard.writeText(inviteText()); toast('Invito copiato: incollalo in un messaggio'); } catch { toast('Condivisione non disponibile'); } }
+    case 'export-json': download('scadenziario-backup.json', 'application/json', JSON.stringify({ items: state.items, deadlines: state.deadlines, item_logs: state.logs, shifts: state.shifts.map(({ tmp, ...r }) => r) }, null, 2)); break;
+    case 'copy-code': try { await navigator.clipboard.writeText(el.dataset.kind === 'view' ? state.invites.invite_code_view : state.invites.invite_code); toast('Codice copiato'); } catch { toast('Copia non riuscita: scrivilo a mano'); } break;
+    case 'share-code': {
+      const txt = inviteText(el.dataset.kind);
+      if (navigator.share) { try { await navigator.share({ title: 'Scadenziario', text: txt }); } catch {} }
+      else { try { await navigator.clipboard.writeText(txt); toast('Invito copiato: incollalo in un messaggio'); } catch { toast('Condivisione non disponibile'); } }
       break;
+    }
     case 'new-code':
       if (await confirmDialog({ title: 'Generare un nuovo codice?', text: 'Il codice attuale non funzionerà più. Chi è già dentro resta nello spazio.', ok: 'Genera' })) {
-        const { data, error } = await sb.rpc('regenerate_invite', { p_household: state.hid });
-        if (error) fail(error); else { state.household.invite_code = data; openSettings(); toast('Nuovo codice pronto'); }
+        const { data, error } = await sb.rpc('regenerate_invite', { p_household: state.hid, p_kind: el.dataset.kind });
+        if (error) fail(error); else { state.invites[el.dataset.kind === 'view' ? 'invite_code_view' : 'invite_code'] = data; openSettings(); toast('Nuovo codice pronto'); }
       }
       break;
+    case 'copy-token': try { await navigator.clipboard.writeText(state.invites.inbox_token); toast('Chiave copiata'); } catch { toast('Copia non riuscita'); } break;
+    case 'new-token':
+      if (await confirmDialog({ title: 'Generare una nuova chiave?', text: 'Lo script di Gmail smetterà di funzionare finché non incolli la nuova chiave.', ok: 'Genera' })) {
+        const { data, error } = await sb.rpc('regenerate_invite', { p_household: state.hid, p_kind: 'token' });
+        if (error) fail(error); else { state.invites.inbox_token = data; toast('Nuova chiave pronta'); }
+      }
+      break;
+    case 'member-role': {
+      const { error } = await sb.rpc('set_member_role', { p_household: state.hid, p_user: el.dataset.user, p_role: el.dataset.role });
+      if (error) fail(error); else { await loadHousehold(); openSettings(); toast(el.dataset.role === 'viewer' ? 'Ora può solo guardare' : 'Ora può modificare'); }
+      break;
+    }
+    case 'member-remove':
+      if (await confirmDialog({ title: 'Rimuovere questa persona?', text: `${el.dataset.email || 'La persona'} non vedrà più le scadenze. Potrà rientrare solo con un nuovo codice.`, ok: 'Rimuovi', danger: true })) {
+        const { error } = await sb.rpc('remove_member', { p_household: state.hid, p_user: el.dataset.user });
+        if (error) fail(error); else { await loadHousehold(); openSettings(); toast('Persona rimossa'); }
+      }
+      break;
+    case 'inbox-add': acceptInbox(id); break;
+    case 'inbox-paid': inboxPaid(id); break;
+    case 'inbox-skip': if (await resolveInbox(id, 'dismissed')) { render(); toast('Scartata'); } break;
     case 'auth-toggle': state.authMode = state.authMode === 'login' ? 'signup' : 'login'; renderLogin(); break;
     case 'forgot': doForgot(); break;
     case 'logout':
       if (sb) await sb.auth.signOut();
-      closeSheetNow(); state.user = null; state.hid = null; state.household = null; state.items = []; state.deadlines = []; state.logs = []; state.tab = 'home'; state.itemId = null; render();
+      document.body.classList.remove('ro'); state.role = 'owner'; state.inbox = [];
+      closeSheetNow(); state.user = null; state.hid = null; state.household = null; state.items = []; state.deadlines = []; state.logs = []; state.shifts = []; state.tab = 'home'; state.itemId = null; render();
       break;
   }
 });
@@ -1532,10 +2102,14 @@ document.addEventListener('submit', async (e) => {
   try {
     switch (form.id) {
       case 'dl-form': await onDeadlineSubmit(form); break;
+      case 'noop': break;
       case 'item-form': await onItemSubmit(form); break;
-      case 'sec-form': if (await onSectionSubmit(form)) { if (seq) advanceSeq(); else { closeSheetNow(); render(); toast('Salvato'); } } break;
+      case 'sec-form': if (await onSectionSubmit(form)) { if (form.dataset.inbox) await resolveInbox(form.dataset.inbox, 'done'); if (seq) advanceSeq(); else { closeSheetNow(); render(); toast('Salvato'); } } break;
       case 'ident-form': if (await onIdentSubmit(form)) { if (seq && form.dataset.seq) advanceSeq(); else { closeSheetNow(); render(); toast('Salvato'); } } break;
       case 'log-form': await onLogSubmit(form); break;
+      case 'hist-form': await onHistorySubmit(form); break;
+      case 'stype-form': await onShiftTypeSubmit(form); break;
+      case 'cycle-form': await onCycleSubmit(form); break;
       case 'login-form': await doLogin(form); break;
       case 'create-hh-form': await onCreateHousehold(form); break;
       case 'join-hh-form': await onJoinHousehold(form); break;
@@ -1570,15 +2144,23 @@ document.addEventListener('visibilitychange', () => {
 
 /* ---------- avvio ---------- */
 async function loadHousehold() {
-  const { data, error } = await sb.from('household_members').select('household_id, households(id,name,invite_code)').limit(1);
+  const { data, error } = await sb.from('household_members').select('household_id, role, households(id,name)').eq('user_id', state.user.id).limit(1);
   if (error) throw error;
   const row = data?.[0];
   state.hid = row?.household_id || null;
   state.household = row?.households || null;
+  state.role = row?.role || 'member';
+  state.memberList = []; state.invites = null;
   if (state.hid) {
-    const m = await sb.from('household_members').select('user_id');
-    state.members = m.data?.length || 1;
+    const m = await sb.rpc('list_members', { p_household: state.hid });
+    state.memberList = m.error ? [] : m.data;
+    state.members = state.memberList.length || 1;
+    if (state.role === 'owner') {
+      const iv = await sb.rpc('get_invites', { p_household: state.hid });
+      state.invites = iv.error ? null : iv.data?.[0] || null;
+    }
   }
+  document.body.classList.toggle('ro', readOnly());
 }
 
 async function loadData() {
@@ -1586,18 +2168,18 @@ async function loadData() {
   try {
     if (MODE === 'cloud') {
       await loadHousehold();
-      if (!state.hid) { state.items = []; state.deadlines = []; state.logs = []; state.loadError = ''; state.offline = false; render(); return; }
+      if (!state.hid) { state.items = []; state.deadlines = []; state.logs = []; state.shifts = []; state.loadError = ''; state.offline = false; render(); return; }
     }
     const d = await store.load();
-    state.items = d.items.map(normItem); state.deadlines = d.deadlines; state.logs = d.item_logs || []; sortDeadlines();
+    state.items = d.items.map(normItem); state.deadlines = d.deadlines; state.logs = d.item_logs || []; state.inbox = d.inbox || []; state.shifts = d.shifts || []; sortDeadlines();
     state.loadError = ''; state.offline = false;
-    if (snapKey) { try { localStorage.setItem(snapKey, JSON.stringify({ items: state.items, deadlines: state.deadlines, logs: state.logs, hid: state.hid, household: state.household, members: state.members })); } catch {} }
+    if (snapKey) { try { localStorage.setItem(snapKey, JSON.stringify({ items: state.items, deadlines: state.deadlines, logs: state.logs, shifts: state.shifts, hid: state.hid, household: state.household, members: state.members })); } catch {} }
   } catch (e) {
     console.error(e);
     const snap = snapKey && localStorage.getItem(snapKey);
     if (snap) {
       const d = JSON.parse(snap);
-      state.items = d.items; state.deadlines = d.deadlines; state.logs = d.logs || []; state.hid = d.hid; state.household = d.household; state.members = d.members || 1; state.offline = true;
+      state.items = d.items; state.deadlines = d.deadlines; state.logs = d.logs || []; state.shifts = d.shifts || []; state.hid = d.hid; state.household = d.household; state.members = d.members || 1; state.offline = true;
     } else state.loadError = 'Non riesco a caricare i dati. Controlla la connessione.';
   }
   render();
