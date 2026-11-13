@@ -94,3 +94,8 @@ Se cambi icona o aggiorni l'app e il telefono mostra ancora la vecchia, elimina 
 - In Altro (e in Home) compare «Turni insieme»: un solo calendario con i turni di tutti, un colore per persona. Si stampa su un foglio.
 - Per ogni persona crea una scheda «Lavoro e turni» (es. «Turni di Giovanni», «Turni di Patrizia»).
 - Sigle come sul foglio dell'ospedale: 1 (8–14), 1C (6–14), 2A (13–19), 2 (14–22), 3 (22–06), S, R, REP, F, P, Ma. Si possono rinominare o aggiungere da «Tipi».
+
+## v7
+- Titolo del mese nel calendario leggibile anche su iPhone; reparto di ogni settimana (anche in stampa); «Compila dal foglio» con la foto del foglio come guida (resta sul telefono).
+- Versione per computer (schermo largo): barra a sinistra, finestre al centro, elenchi a due colonne. Su telefono non cambia nulla.
+- Script Gmail: `primaScansione` (ultimi 60 giorni) e `provaUltimi60Giorni`.

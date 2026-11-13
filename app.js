@@ -777,11 +777,91 @@ function pageFamily() {
       <div class="sh-sums">${legend}</div>
     </div>
     ${palette}
+    ${readOnly() ? '' : `<div class="actions"><button class="btn" data-action="fam-quick">${ic('pencil')}Compila dal foglio</button></div>`}
+    ${repartiBlock(people)}
     <div class="actions row-actions">
       ${readOnly() ? '' : `<button class="btn secondary" data-action="shift-cycle" data-id="${who.id}">${ic('repeat')}Ripeti un ciclo (${esc(firstName(who))})</button>`}
       <button class="btn secondary" data-action="fam-print">${ic('printer')}Stampa</button>
     </div>`;
   return { title: 'Turni insieme', body };
+}
+
+/* --- reparto della settimana (cambia ogni settimana) --- */
+const mondayOf = (iso) => { const d = fromISO(iso); return toISO(new Date(d.getFullYear(), d.getMonth(), d.getDate() - ((d.getDay() + 6) % 7), 12)); };
+const repartoOf = (it, mon) => (it.details?.reparti || {})[mon] || '';
+const shortRange = (mon) => { const a = fromISO(mon), b = new Date(a.getFullYear(), a.getMonth(), a.getDate() + 6, 12); return `${a.getDate()}${a.getMonth() !== b.getMonth() ? ' ' + MONTHS_LONG[a.getMonth()].slice(0, 3) : ''}–${b.getDate()} ${MONTHS_LONG[b.getMonth()].slice(0, 3)}`; };
+const weeksOfMonth = (ym) => { const out = []; monthCells(ym).forEach((c, i) => { if (i % 7 === 0) out.push(c.iso); }); return out; };
+
+function repartiBlock(people) {
+  const rows = weeksOfMonth(curYM()).map((mon) => `
+    <button class="row" data-action="fam-reparti" data-mon="${mon}">
+      <div class="main"><div class="t">${shortRange(mon)}</div>
+        <div class="s">${people.map((p) => { const r = repartoOf(p, mon); return `<span class="rep-pill ${r ? 'sh-c' + famColor(p) : 'empty'}"><b>${esc(firstName(p).slice(0, 1))}</b> ${r ? esc(r) : 'reparto?'}</span>`; }).join('')}</div></div>
+      <span class="chev">${ic('next')}</span></button>`).join('');
+  return `<div class="group-title">Reparto di ogni settimana</div><div class="list rep-list">${rows}</div>`;
+}
+
+function openReparti(mon) {
+  const people = famPeople();
+  const sugg = [...new Set(people.flatMap((p) => Object.values(p.details?.reparti || {})).filter(Boolean))];
+  openSheet(`Reparto · ${shortRange(mon)}`, `
+    <form id="rep-form" data-mon="${mon}" autocomplete="off">
+      ${people.map((p) => `<label>${esc(firstName(p))}<input name="p_${p.id}" list="rep-sugg" maxlength="40" value="${esc(repartoOf(p, mon))}" placeholder="es. Microbiologia"></label>`).join('')}
+      <datalist id="rep-sugg">${sugg.map((x) => `<option value="${esc(x)}">`).join('')}</datalist>
+      <p class="hint">Lo trovi sul foglio settimanale. Lascia vuoto se non c'è.</p>
+      <div class="actions"><button class="btn" type="submit">Salva</button></div>
+    </form>`);
+}
+
+async function onRepartiSubmit(form) {
+  const mon = form.dataset.mon; let ok = true;
+  for (const p of famPeople()) {
+    const v = (form.elements['p_' + p.id]?.value || '').trim();
+    if (v === repartoOf(p, mon)) continue;
+    const reparti = { ...(p.details?.reparti || {}) };
+    if (v) reparti[mon] = v; else delete reparti[mon];
+    if (!(await saveItem(p.id, { details: { ...(p.details || {}), reparti } }))) ok = false;
+  }
+  if (ok) { closeSheetNow(); render(); toast('Salvato'); }
+}
+
+/* --- inserimento rapido: scrivi le sigle del mese, una per giorno --- */
+function openQuick() {
+  const people = famPeople(); const ym = curYM(); const [y, m] = ym.split('-').map(Number);
+  openSheet('Compila dal foglio', `
+    <form id="quick-form" autocomplete="off">
+      <label>Di chi è la riga?<select name="who">${people.map((p) => `<option value="${p.id}" ${p.id === state.famWho ? 'selected' : ''}>${esc(firstName(p))}</option>`).join('')}</select></label>
+      <label>Da che giorno parti? (${MONTHS_LONG[m - 1]} ${y})<input name="start" type="number" min="1" max="31" value="1" inputmode="numeric"></label>
+      <div class="photo-ref">
+        <label class="btn secondary" style="cursor:pointer">${ic('file')}Mostra la foto del foglio qui sotto<input id="quick-photo" type="file" accept="image/*" hidden></label>
+        <div id="quick-photo-box" hidden><div class="pbox"><img id="quick-photo-img" alt="Foto del foglio"></div>
+        <div class="zoom"><button type="button" data-action="photo-zoom" data-z="-1">Riduci</button><button type="button" data-action="photo-zoom" data-z="1">Ingrandisci</button></div></div>
+        <p class="hint" style="margin-top:6px">La foto resta sul tuo telefono: serve solo da guida mentre scrivi, non viene salvata né inviata.</p>
+      </div>
+      <label>Sigle, una per giorno, separate da uno spazio
+        <textarea class="quick-box" name="codes" spellcheck="false" autocapitalize="characters" placeholder="1C 1C 1C 1C A A A 1 2 3 S R"></textarea></label>
+      <p class="hint">Copia la riga dal foglio, giorno per giorno, anche i sabati e le domeniche. Per un giorno vuoto scrivi un trattino «-». Le sigle sconosciute le segnalo e le salto.</p>
+      <div class="actions"><button class="btn" type="submit">Compila il calendario</button></div>
+    </form>`);
+}
+
+async function onQuickSubmit(form) {
+  const it = byId(state.items, form.elements.who.value); if (!it) return;
+  const start = Math.max(1, Number(form.elements.start.value) || 1);
+  const ym = curYM(); const [y, m] = ym.split('-').map(Number); const dim = new Date(y, m, 0).getDate();
+  const toks = form.elements.codes.value.trim().split(/[\s,;|]+/).filter(Boolean);
+  if (!toks.length) { toast('Scrivi almeno una sigla.'); return; }
+  const types = shiftTypes(it, true); const entries = []; const unknown = new Set(); const over = Math.max(0, start - 1 + toks.length - dim);
+  toks.forEach((tk, i) => {
+    const day = start + i; if (day > dim) return;
+    if (/^[-–._]+$/.test(tk)) return;
+    const t = types.find((x) => x.short.toLowerCase() === tk.toLowerCase());
+    if (!t) { unknown.add(tk); return; }
+    entries.push({ day: `${ym}-${String(day).padStart(2, '0')}`, kind: t.id });
+  });
+  if (entries.length && !applyShiftsBulk(it.id, entries)) return;
+  state.famWho = it.id; closeSheetNow(); render();
+  toast(`${entries.length} giorni compilati` + (unknown.size ? ` · sigle non riconosciute: ${[...unknown].join(', ')}` : '') + (over ? ` · ${over} in più oltre fine mese` : ''));
 }
 
 function openFamilyDay(iso) {
@@ -801,11 +881,12 @@ function printFamily() {
   const used = {};
   const rows = []; const cells = monthCells(ym);
   for (let i = 0; i < cells.length; i += 7) {
+    const mon = cells[i].iso;
     rows.push(`<tr>${cells.slice(i, i + 7).map((c) => `<td class="${c.inMonth ? '' : 'out'}"><span class="d">${c.n}</span>${c.inMonth ? people.map((p) => {
       const r = maps[p.id][c.iso]; if (!r) return `<div class="pr-line"></div>`;
       const t = shiftOf(p, r.kind); (used[t.short + '|' + t.label + '|' + shiftHours(t)] = 1);
       return `<div class="pr-line pr-c${famColor(p)}"><i>${esc(firstName(p).slice(0, 1))}</i><b>${esc(t.short)}</b><small>${esc(shiftHours(t))}</small></div>`;
-    }).join('') : ''}</td>`).join('')}</tr>`);
+    }).join('') : ''}</td>`).join('')}<td class="rep">${people.map((p) => { const r = repartoOf(p, mon); return r ? `<div class="pr-c${famColor(p)}"><b>${esc(firstName(p).slice(0, 1))}</b> ${esc(r)}</div>` : ''; }).join('')}</td></tr>`);
   }
   const legend = Object.keys(used).map((k) => { const [a, b, h] = k.split('|'); return `<span class="pr-leg"><b>${esc(a)}</b> ${esc(b)}${h ? ' ' + esc(h) : ''}</span>`; }).join('');
   const who = people.map((p) => `<span class="pr-leg pr-c${famColor(p)}"><b>${esc(firstName(p).slice(0, 1))}</b> ${esc(firstName(p))}</span>`).join('');
@@ -813,8 +894,8 @@ function printFamily() {
   if (!root) { root = document.createElement('div'); root.id = 'print-root'; document.body.appendChild(root); }
   root.innerHTML = `
     <div class="pr-head"><h1>Turni di ${people.map((p) => esc(firstName(p))).join(' e ')}</h1><div>${MONTHS_LONG[m - 1].charAt(0).toUpperCase() + MONTHS_LONG[m - 1].slice(1)} ${y}</div></div>
-    <table class="pr-grid pr-fam"><thead><tr>${['Lunedì', 'Martedì', 'Mercoledì', 'Giovedì', 'Venerdì', 'Sabato', 'Domenica'].map((x) => `<th>${x}</th>`).join('')}</tr></thead><tbody>${rows.join('')}</tbody></table>
-    <div class="pr-legend">${who}</div><div class="pr-legend">${legend}</div>`;
+    <div class="pr-legend">${who}${legend}</div>
+    <table class="pr-grid pr-fam"><thead><tr>${['Lunedì', 'Martedì', 'Mercoledì', 'Giovedì', 'Venerdì', 'Sabato', 'Domenica'].map((x) => `<th>${x}</th>`).join('')}<th class="rep">Reparto</th></tr></thead><tbody>${rows.join('')}</tbody></table>`;
   setTimeout(() => window.print(), 80);
 }
 
@@ -2008,7 +2089,7 @@ async function onJoinHousehold(form) {
 }
 
 /* ---------- eventi ---------- */
-const WRITE_ACTIONS = new Set(['fam-day', 'fam-pick', 'fam-clear', 'fam-who', 'shift-day', 'shift-paint', 'shift-pick', 'shift-clear', 'shift-types', 'shift-cycle', 'new-shift-type', 'edit-shift-type', 'new-history', 'delete-history', 'new-deadline', 'new-item', 'new-log', 'edit-item', 'delete-item', 'hide-section', 'unhide-section', 'delete-deadline', 'delete-log', 'pay-form', 'reopen-form', 'inbox-add', 'inbox-paid', 'inbox-skip']);
+const WRITE_ACTIONS = new Set(['fam-day', 'fam-quick', 'fam-reparti', 'fam-pick', 'fam-clear', 'fam-who', 'shift-day', 'shift-paint', 'shift-pick', 'shift-clear', 'shift-types', 'shift-cycle', 'new-shift-type', 'edit-shift-type', 'new-history', 'delete-history', 'new-deadline', 'new-item', 'new-log', 'edit-item', 'delete-item', 'hide-section', 'unhide-section', 'delete-deadline', 'delete-log', 'pay-form', 'reopen-form', 'inbox-add', 'inbox-paid', 'inbox-skip']);
 document.addEventListener('click', async (e) => {
   const el = e.target.closest('[data-action]');
   if (!el) return;
@@ -2028,6 +2109,9 @@ document.addEventListener('click', async (e) => {
     }
     case 'fam-pick': if (applyShift(el.dataset.item, el.dataset.day, el.dataset.type)) { render(); openFamilyDay(el.dataset.day); } break;
     case 'fam-clear': if (applyShift(el.dataset.item, el.dataset.day, null)) { render(); openFamilyDay(el.dataset.day); } break;
+    case 'fam-quick': openQuick(); break;
+    case 'photo-zoom': { const img = $('#quick-photo-img'); const w = parseInt(img.style.width || '260', 10); img.style.width = Math.max(100, Math.min(600, w + Number(el.dataset.z) * 80)) + '%'; break; }
+    case 'fam-reparti': openReparti(el.dataset.mon); break;
     case 'fam-print': printFamily(); break;
     case 'back': state.itemId = null; state.fam = false; state.paint = null; state.anim = 'pop'; render(); window.scrollTo(0, 0); break;
     case 'new-deadline': openDeadlineForm(null, el.dataset.item); break;
@@ -2186,6 +2270,10 @@ document.addEventListener('change', (e) => {
   onDeadlineFormChange(e);
   onSecFormInput(e);
   if (e.target.id === 'import-file' && e.target.files[0]) importJSON(e.target.files[0]);
+  if (e.target.id === 'quick-photo' && e.target.files[0]) {
+    const img = $('#quick-photo-img'); if (img.dataset.url) URL.revokeObjectURL(img.dataset.url);
+    img.dataset.url = URL.createObjectURL(e.target.files[0]); img.src = img.dataset.url; img.style.width = '260%'; $('#quick-photo-box').hidden = false;
+  }
 });
 
 document.addEventListener('submit', async (e) => {
@@ -2204,6 +2292,8 @@ document.addEventListener('submit', async (e) => {
       case 'hist-form': await onHistorySubmit(form); break;
       case 'stype-form': await onShiftTypeSubmit(form); break;
       case 'cycle-form': await onCycleSubmit(form); break;
+      case 'quick-form': await onQuickSubmit(form); break;
+      case 'rep-form': await onRepartiSubmit(form); break;
       case 'login-form': await doLogin(form); break;
       case 'create-hh-form': await onCreateHousehold(form); break;
       case 'join-hh-form': await onJoinHousehold(form); break;

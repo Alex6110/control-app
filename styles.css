@@ -393,7 +393,7 @@ a.chip { text-decoration: none; display: inline-flex; align-items: center; }
 
 .sh-card { padding: 12px 10px 14px; }
 .sh-nav { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; }
-.sh-title { font-size: 18px; font-weight: 750; text-transform: capitalize; padding: 6px 12px; border-radius: 12px; color: var(--text); }
+.sh-title { -webkit-appearance: none; appearance: none; -webkit-tap-highlight-color: transparent; outline: 0; background: transparent; border: 0; font-size: 18px; font-weight: 750; text-transform: capitalize; padding: 6px 12px; border-radius: 12px; color: var(--text); }
 .sh-week { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 4px; text-align: center; font-size: 11.5px; font-weight: 700; color: var(--muted); margin-bottom: 4px; }
 .sh-grid { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 4px; }
 .sh-cell { position: relative; aspect-ratio: 1 / 1.08; border-radius: 11px; background: var(--bg); color: var(--text); display: flex; flex-direction: column; align-items: center; justify-content: space-between; padding: 4px 2px 5px; min-width: 0; border: 1.5px solid transparent; }
@@ -482,4 +482,75 @@ a.chip { text-decoration: none; display: inline-flex; align-items: center; }
   .pr-fam .pr-line b { font-size: 13pt; display: inline; text-align: left; }
   .pr-fam .pr-line small { font-size: 8pt; margin-left: auto; display: inline; }
 }
-@media print { .pr-legend { break-inside: avoid; } .pr-fam + .pr-legend { margin-top: 6px; } .pr-leg { white-space: nowrap; } }
+@media print { .pr-legend { break-inside: auto; } .pr-fam + .pr-legend { margin-top: 6px; } }
+
+/* v6.1: reparti settimanali e inserimento rapido */
+.rep-list .row .s { display: flex; flex-wrap: wrap; gap: 6px; }
+.rep-pill { display: inline-flex; gap: 5px; align-items: center; padding: 3px 9px; border-radius: 999px; font-size: 12.5px; font-weight: 700; }
+.rep-pill[class*="sh-c"] { background: var(--shb); color: var(--shf); }
+.rep-pill.empty { background: var(--bg); color: var(--muted); font-weight: 500; }
+.quick-box { width: 100%; min-height: 110px; margin-top: 6px; padding: 12px 14px; border-radius: 13px; border: 1px solid var(--line); background: var(--bg); font: 600 16px/1.5 ui-monospace, Menlo, monospace; color: var(--text); letter-spacing: .5px; }
+@media print { .pr-fam th.rep, .pr-fam td.rep { width: 30mm; } .pr-fam td.rep div { font-size: 9pt; margin-top: 6px; padding: 2px 4px; border-radius: 2px; } }
+@media print {
+  .pr-fam td.rep b { font-size: 9pt; display: inline; text-align: left; }
+  .pr-fam td { height: 15mm; }
+  .pr-fam + .pr-legend, .pr-fam ~ .pr-legend { margin-top: 4px; gap: 5px; }
+  .pr-fam ~ .pr-legend .pr-leg { font-size: 8.5pt; padding: 1px 6px; }
+}
+@media print {
+  .pr-fam td { height: 12mm; padding: 1px 3px; }
+  .pr-fam .d { font-size: 8pt; }
+  .pr-fam .pr-line { min-height: 4.5mm; margin-top: 1px; padding: 0 3px; }
+  .pr-fam .pr-line b { font-size: 11pt; }
+  .pr-fam .pr-line small, .pr-fam .pr-line i { font-size: 7pt; }
+  .pr-fam th { padding: 2px; font-size: 9pt; }
+  .pr-head h1 { font-size: 18pt; } .pr-head div { font-size: 13pt; }
+}
+
+.sh-title:active, .sh-title:focus { background: var(--bg); color: var(--text); }
+.sh-title:focus-visible { box-shadow: 0 0 0 2px var(--accent, #2f6bff); }
+.sh-nav .icon-btn, .sh-nav .icon-btn:active { -webkit-tap-highlight-color: transparent; }
+.photo-ref { margin: 8px 0 4px; }
+.photo-ref .pbox { max-height: 38vh; overflow: auto; border-radius: 12px; border: 1px solid var(--line); background: var(--bg); touch-action: pan-x pan-y pinch-zoom; }
+.photo-ref img { display: block; width: 260%; max-width: none; }
+.photo-ref .zoom { display: flex; gap: 8px; margin-top: 6px; }
+.photo-ref .zoom button { flex: 1; padding: 8px; border-radius: 10px; border: 1px solid var(--line); background: var(--card); color: var(--text); font-weight: 650; }
+
+/* ---------- v7: computer (schermi larghi) ---------- */
+@media (min-width: 900px) and (hover: hover) {
+  :root { --side-w: 232px; }
+  body { padding-left: var(--side-w); }
+  .nav { top: 0; bottom: 0; right: auto; width: var(--side-w); border-top: 0; border-right: 1px solid var(--line); padding: 22px 12px; backdrop-filter: none; background: var(--card); display: flex; flex-direction: column; }
+  .nav::before { content: "Scadenziario"; display: block; font-size: 20px; font-weight: 800; letter-spacing: -.02em; padding: 4px 14px 22px; }
+  .nav .inner { max-width: none; margin: 0; display: flex; flex-direction: column; gap: 4px; height: auto; }
+  .nav button { flex-direction: row; justify-content: flex-start; gap: 12px; padding: 12px 14px; border-radius: 14px; font-size: 15.5px; height: auto; }
+  .nav button:hover { background: var(--bg); }
+  .nav button.active { background: color-mix(in srgb, var(--accent) 12%, transparent); }
+  .nav button .ic { width: 22px; height: 22px; }
+  .wrap { max-width: 1040px; padding: 0 36px; }
+  main.wrap { padding-bottom: 80px; }
+  .topbar { position: sticky; }
+  .topbar .bar h1 { font-size: 24px; }
+  /* elenchi e schede su due colonne */
+  .list { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; align-items: stretch; }
+  .list > .row { margin: 0; }
+  .scards { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .fab { right: 40px; bottom: 32px; }
+  #toast { bottom: 40px; left: calc(50% + var(--side-w) / 2); }
+  /* finestre: al centro, non dal basso */
+  .overlay { background: rgba(10, 12, 20, .45); }
+  .sheet { top: 50%; bottom: auto; left: 50%; right: auto; transform: translate(-50%, -50%); width: min(620px, calc(100vw - 80px)); max-width: none; max-height: 86vh; border-radius: 22px; padding: 20px 26px 26px; animation: pop .18s ease-out; box-shadow: 0 24px 70px rgba(0, 0, 0, .28); }
+  .sheet .grab { display: none; }
+  @keyframes pop { from { opacity: 0; transform: translate(-50%, -48%) scale(.98); } to { opacity: 1; transform: translate(-50%, -50%); } }
+  .sheet.noanim { animation: none; }
+  .dlg { max-width: 440px; }
+  /* calendari più larghi */
+  .sh-card { padding: 18px 22px 22px; }
+  .sh-grid { gap: 6px; }
+  .sh-cell { aspect-ratio: auto; min-height: 74px; }
+  .sh-cell .s { font-size: 20px; }
+  .fam-grid { gap: 6px; }
+  .fam-cell { min-height: 96px; padding: 6px 5px; }
+  .fam-pill { font-size: 15px; padding: 6px 0; }
+  .sh-palette { gap: 8px; }
+}

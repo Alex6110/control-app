@@ -184,14 +184,14 @@ function segnaVisto(id) {
   PropertiesService.getScriptProperties().setProperty('visti', JSON.stringify(v.slice(-400)));
 }
 
-function raccogli() {
+function raccogli(giorni, soloNuove) {
   var email = Session.getEffectiveUser().getEmail();
-  var q = 'in:inbox newer_than:' + GIORNI_INDIETRO + 'd -category:promotions -category:social -category:forums';
+  var q = 'in:inbox newer_than:' + (giorni || GIORNI_INDIETRO) + 'd -category:promotions -category:social -category:forums';
   var visti = giaVisti(), righe = [], idsNuovi = [], n = 0;
   GmailApp.search(q, 0, MAX_MAIL_PER_GIRO).forEach(function (th) {
     th.getMessages().forEach(function (m) {
       var id = m.getId();
-      if (visti.indexOf(id) >= 0 || n >= MAX_MAIL_PER_GIRO) return;
+      if ((soloNuove !== false && visti.indexOf(id) >= 0) || n >= MAX_MAIL_PER_GIRO) return;
       n++; idsNuovi.push(id);
       var allegati = [];
       m.getAttachments({ includeInlineImages: false }).forEach(function (a) {
@@ -226,6 +226,21 @@ function controllaPosta() {
 // Prova a secco: mostra nel registro che cosa troverebbe, senza inviare niente.
 function provaSenzaInviare() {
   var r = raccogli();
+  Logger.log(JSON.stringify(r.righe, null, 2));
+  Logger.log('Mail guardate: ' + r.ids.length + ' · proposte: ' + r.righe.length + ' (niente inviato)');
+}
+
+// PRIMA VOLTA: guarda le mail degli ultimi 60 giorni (a gruppi di 30 per volta) e le manda all'app.
+// Lancia 'primaScansione' più volte finché nel log trovi "Mail guardate: 0".
+function primaScansione() {
+  var r = raccogli(60, true);
+  if (r.righe.length) invia(r.righe);
+  r.ids.forEach(segnaVisto);
+  Logger.log('Mail guardate: ' + r.ids.length + ' · proposte inviate: ' + r.righe.length + (r.ids.length >= MAX_MAIL_PER_GIRO ? ' · ce ne sono altre: rilancia' : ' · finito'));
+}
+// Come sopra ma senza inviare nulla: serve solo a vedere che cosa troverebbe.
+function provaUltimi60Giorni() {
+  var r = raccogli(60, false);
   Logger.log(JSON.stringify(r.righe, null, 2));
   Logger.log('Mail guardate: ' + r.ids.length + ' · proposte: ' + r.righe.length + ' (niente inviato)');
 }
