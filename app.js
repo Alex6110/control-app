@@ -449,14 +449,14 @@ function rowDeadline(dl, opts = {}) {
   const it = byId(state.items, dl.item_id);
   const u = dl.paid ? '' : urgency(dl.due_date);
   const sub = dl.paid
-    ? `Pagata il ${fmtDate(dl.paid_on || dl.due_date)}`
-    : `${opts.hideItem ? '' : esc(it?.name || '') + ' · '}${relative(dl.due_date)}`;
+    ? (dl.kind === 'appuntamento' ? `Fatto il ${fmtDate(dl.paid_on || dl.due_date)}` : `Pagata il ${fmtDate(dl.paid_on || dl.due_date)}`)
+    : `${opts.hideItem ? '' : esc(it?.name || '') + ' · '}${relative(dl.due_date)}${dl.time ? ' · ore ' + esc(dl.time) : ''}`;
   return `
     <div class="row ${dl.paid ? 'done' : ''}" data-action="edit-deadline" data-id="${dl.id}" role="button" tabindex="0">
       ${tile(k.icon, it?.category)}
       <div class="main"><div class="t">${esc(dl.title)}</div><div class="s ${u}">${sub}</div></div>
-      <div class="right"><div class="amt">${money(dl.amount)}</div><div class="dt">${fmtShort(dl.due_date)}</div></div>
-      ${dl.paid ? '' : `<button class="check" data-action="pay" data-id="${dl.id}" aria-label="Segna come pagata">${ic('check')}</button>`}
+      <div class="right"><div class="amt">${dl.kind === 'appuntamento' && dl.time ? esc(dl.time) : money(dl.amount)}</div><div class="dt">${fmtShort(dl.due_date)}</div></div>
+      ${dl.paid ? '' : `<button class="check" data-action="pay" data-id="${dl.id}" aria-label="Segna come fatta o pagata">${ic('check')}</button>`}
     </div>`;
 }
 
@@ -568,6 +568,7 @@ function applyShiftsBulk(itemId, entries) {   // entries: [{day, kind}]
 }
 
 function shiftsBlock(it) {
+  const people = famPeople();
   const ym = curYM(); const [y, m] = ym.split('-').map(Number);
   const map = shiftMap(it.id); const types = shiftTypes(it); const today = todayISO();
   const cells = monthCells(ym).map((c) => {
@@ -597,9 +598,10 @@ function shiftsBlock(it) {
       <div class="sh-grid">${cells}</div>
       ${summary ? `<div class="sh-sums">${summary}</div>` : ''}
     </div>
+    ${people.length < 2 && !readOnly() ? `<div class="card addp"><b>Manca una persona?</b><p class="hint">Per vedere i turni di tutti nello stesso calendario, aggiungi anche l'altra persona.</p><button class="btn secondary" data-action="fam-addperson">${ic('plus')}Aggiungi una persona</button></div>` : ''}
     ${palette}
     <div class="actions row-actions">
-      ${readOnly() ? '' : `<button class="btn secondary" data-action="shift-cycle" data-id="${it.id}">${ic('repeat')}Ripeti un ciclo</button>`}
+      ${readOnly() ? '' : `<button class="btn" data-action="fam-quick" data-id="${it.id}">${ic('pencil')}Compila dal foglio</button><button class="btn secondary" data-action="shift-cycle" data-id="${it.id}">${ic('repeat')}Ripeti un ciclo</button>`}
       <button class="btn secondary" data-action="shift-print" data-id="${it.id}">${ic('printer')}Stampa</button>
     </div>`;
 }
@@ -836,13 +838,63 @@ function openQuick() {
         <label class="btn secondary" style="cursor:pointer">${ic('file')}Mostra la foto del foglio qui sotto<input id="quick-photo" type="file" accept="image/*" hidden></label>
         <div id="quick-photo-box" hidden><div class="pbox"><img id="quick-photo-img" alt="Foto del foglio"></div>
         <div class="zoom"><button type="button" data-action="photo-zoom" data-z="-1">Riduci</button><button type="button" data-action="photo-zoom" data-z="1">Ingrandisci</button></div></div>
-        <p class="hint" style="margin-top:6px">La foto resta sul tuo telefono: serve solo da guida mentre scrivi, non viene salvata né inviata.</p>
+        <div id="quick-read" hidden>
+          <label>Cognome come sta sul foglio<input name="cognome" value="${esc(byId(people, state.famWho)?.details?.cognome || '')}" placeholder="es. Branca" autocapitalize="words"></label>
+          <button type="button" class="btn" data-action="quick-read" id="quick-read-btn">${ic('eye')}Leggi la riga dalla foto</button>
+          <p class="hint" id="quick-read-msg" style="margin-top:6px"></p>
+        </div>
+        <p class="hint" style="margin-top:6px">La foto non viene salvata. Se usi «Leggi la riga dalla foto» viene inviata una volta, per la lettura, al servizio di intelligenza artificiale che hai collegato; altrimenti resta sul telefono come guida.</p>
       </div>
       <label>Sigle, una per giorno, separate da uno spazio
         <textarea class="quick-box" name="codes" spellcheck="false" autocapitalize="characters" placeholder="1C 1C 1C 1C A A A 1 2 3 S R"></textarea></label>
       <p class="hint">Copia la riga dal foglio, giorno per giorno, anche i sabati e le domeniche. Per un giorno vuoto scrivi un trattino «-». Le sigle sconosciute le segnalo e le salto.</p>
       <div class="actions"><button class="btn" type="submit">Compila il calendario</button></div>
     </form>`);
+}
+
+
+async function shrinkImage(file, max = 2000) {
+  const bmp = await createImageBitmap(file);
+  const k = Math.min(1, max / Math.max(bmp.width, bmp.height));
+  const c = document.createElement('canvas'); c.width = Math.round(bmp.width * k); c.height = Math.round(bmp.height * k);
+  c.getContext('2d').drawImage(bmp, 0, 0, c.width, c.height);
+  return { b64: c.toDataURL('image/jpeg', 0.86).split(',')[1], mime: 'image/jpeg' };
+}
+
+async function quickRead() {
+  const form = $('#quick-form'); const f = $('#quick-photo')?.files[0]; const msg = $('#quick-read-msg'); const btn = $('#quick-read-btn');
+  if (!form || !msg) return;
+  if (!f) { msg.textContent = 'Scegli prima la foto.'; return; }
+  const it = byId(state.items, form.elements.who.value); const cognome = form.elements.cognome.value.trim();
+  if (!it) return;
+  if (cognome.length < 2) { msg.textContent = 'Scrivi il cognome come compare sul foglio.'; return; }
+  const ym = curYM(); const [y, m] = ym.split('-').map(Number); const dim = new Date(y, m, 0).getDate();
+  btn.disabled = true; msg.textContent = 'Leggo la foto… può richiedere fino a 30 secondi.';
+  try {
+    const img = await shrinkImage(f);
+    const codici = shiftTypes(it, true).map((t) => t.short);
+    const { data, error } = await sb.functions.invoke('leggi-turni', { body: { image: img.b64, mime: img.mime, cognome, nome: '', mese: `${MONTHS_LONG[m - 1]} ${y}`, giorni: dim, codici } });
+    if (error || !data || data.errore) {
+      const st = error?.context?.status;
+      msg.textContent = st === 404 ? 'La funzione di lettura non è ancora installata su Supabase: segui la guida «leggi-turni».' : `Non sono riuscito a leggere la foto${data?.errore ? ': ' + data.errore : ''}. Puoi comunque scrivere le sigle a mano.`;
+      return;
+    }
+    if (!data.riga_trovata) { msg.textContent = `Non trovo la riga di «${cognome}» nella foto. Controlla il cognome o inquadra meglio la tabella.`; return; }
+    const sigle = (data.sigle || []).slice(0, dim);
+    form.elements.codes.value = sigle.join(' '); form.elements.start.value = 1;
+    const known = new Set(shiftTypes(it, true).map((t) => t.short.toLowerCase()));
+    const strani = [...new Set(sigle.filter((x) => x !== '-' && !known.has(String(x).toLowerCase())))];
+    const parts = [`Letti ${sigle.length} giorni${data.mese_letto ? ` · mese sul foglio: ${data.mese_letto}` : ''}.`];
+    if (data.mese_letto && !String(data.mese_letto).toLowerCase().includes(MONTHS_LONG[m - 1])) parts.push(`ATTENZIONE: il calendario aperto è ${MONTHS_LONG[m - 1]} ${y}.`);
+    if (sigle.length < dim) parts.push(`Mancano ${dim - sigle.length} giorni alla fine del mese.`);
+    if (data.dubbi?.length) parts.push(`Giorni incerti da controllare: ${data.dubbi.join(', ')}.`);
+    if (strani.length) parts.push(`Sigle non riconosciute: ${strani.join(', ')}.`);
+    parts.push('CONTROLLA sulla foto prima di compilare.');
+    if (data.nota) parts.push(data.nota);
+    msg.textContent = parts.join(' ');
+    if (cognome !== (it.details?.cognome || '')) store.update?.('items', it.id, { details: { ...(it.details || {}), cognome } }).then(() => { it.details = { ...(it.details || {}), cognome }; }).catch(() => {});
+  } catch (e) { msg.textContent = 'Errore nella lettura: ' + (e.message || e); }
+  finally { btn.disabled = false; }
 }
 
 async function onQuickSubmit(form) {
@@ -899,6 +951,14 @@ function printFamily() {
   setTimeout(() => window.print(), 80);
 }
 
+function appointmentsCard() {
+  const today = todayISO();
+  const list = state.deadlines.filter((d) => d.kind === 'appuntamento' && !d.paid && d.due_date >= today)
+    .sort((a, b) => (a.due_date + (a.time || '99')).localeCompare(b.due_date + (b.time || '99'))).slice(0, 5);
+  if (!list.length) return '';
+  return `<div class="group-title">Prossimi appuntamenti</div><div class="list">${list.map((d) => rowDeadline(d)).join('')}</div>`;
+}
+
 function shiftsTodayCard() {
   const today = todayISO(); const tom = toISO(new Date(fromISO(today).getTime() + 86400000));
   const rows = state.items.filter((i) => itemType(i).shifts).map((it) => {
@@ -909,7 +969,7 @@ function shiftsTodayCard() {
     return `<button class="row" data-action="open-item" data-id="${it.id}">${tile('briefcase', 'altro')}
       <div class="main"><div class="t">${esc(it.name)}</div><div class="s sh-today">${part(a, 'oggi')}${part(b, 'domani')}</div></div><span class="chev">${ic('next')}</span></button>`;
   }).join('');
-  const all = state.items.filter((i) => itemType(i).shifts).length >= 2
+  const all = state.items.filter((i) => itemType(i).shifts).length >= 1
     ? `<button class="row" data-action="open-family">${tile('briefcase', 'altro')}<div class="main"><div class="t">Turni insieme</div><div class="s">Il calendario di tutti</div></div><span class="chev">${ic('next')}</span></button>` : '';
   return rows || all ? `<div class="group-title">Turni</div><div class="list">${all}${rows}</div>` : '';
 }
@@ -932,10 +992,13 @@ function inboxCard() {
   if (!list.length) return '';
   const rows = list.slice(0, 5).map((r) => {
     const m = inboxMatch(r);
-    const sub = [r.due_date ? fmtDate(r.due_date) : 'data da controllare', r.amount != null ? money(r.amount) : 'importo non indicato'].join(' · ');
+    const sub = [r.due_date ? fmtDate(r.due_date) + (r.time ? ' ore ' + r.time : '') : 'data da controllare', r.kind === 'appuntamento' ? '' : (r.amount != null ? money(r.amount) : 'importo non indicato')].filter(Boolean).join(' · ');
     return `<div class="inb">
+      <div class="inb-k">${r.kind === 'appuntamento' ? 'Appuntamento' : r.paid_hint ? 'Pagamento ricevuto' : 'Scadenza'}</div>
       <div class="inb-t">${esc(r.title || r.subject || 'Messaggio')}</div>
       <div class="inb-s">${esc(sub)}</div>
+      ${r.subject ? `<div class="inb-from">Dalla mail «${esc(r.subject)}»${r.sender ? ' di ' + esc(r.sender) : ''}</div>` : ''}
+      ${r.note ? `<div class="inb-why">«${esc(r.note)}»</div>` : ''}
       <div class="inb-m">${m.item ? `Per: ${esc(m.item.name)}` : esc(r.sender || '')}${r.paid_hint ? ' · sembra un pagamento già fatto' : ''}</div>
       <div class="inb-a">
         ${r.link ? `<a class="chip" href="${esc(safeUrl(r.link))}" target="_blank" rel="noopener noreferrer">Apri la mail</a>` : ''}
@@ -953,10 +1016,18 @@ async function resolveInbox(id, status) {
   catch (e) { fail(e); return false; }
 }
 
-function acceptInbox(id) {
+async function acceptInbox(id) {
   const r = byId(state.inbox, id); if (!r) return;
+  if (r.kind === 'appuntamento') {
+    let ap = state.items.find((i) => itemType(i).id === 'appuntamenti');
+    if (!ap) ap = await saveItem(null, { name: 'Appuntamenti', category: 'altro', subtype: 'appuntamenti', details: { ident: {} } });
+    if (!ap) return;
+    const note = [r.note, r.sender ? `Da: ${r.sender}` : ''].filter(Boolean).join(' · ');
+    openDeadlineForm(null, ap.id, { inbox: id, pre: { item_id: ap.id, kind: 'appuntamento', due_date: r.due_date || '', time: r.time || '', note, link: r.link || '' } });
+    return;
+  }
   const m = inboxMatch(r);
-  const note = [r.ref ? `Polizza/contratto n. ${r.ref}` : '', r.sender ? `Da: ${r.sender}` : ''].filter(Boolean).join(' · ');
+  const note = [r.ref ? `Polizza/contratto n. ${r.ref}` : '', r.note || '', r.sender ? `Da: ${r.sender}` : ''].filter(Boolean).join(' · ');
   if (m.item && m.sid) {
     const S = SECTIONS[m.sid];
     const dF = S.fields.find((f) => f.dl === 'date'), aF = S.fields.find((f) => f.dl === 'amount');
@@ -1017,7 +1088,7 @@ function pageHome() {
     : `<div class="card soft done-card">${ic('checkCircle')}<div><div class="t">Tutto fatto per questa settimana</div><div class="hint" style="margin:0">${next30.length ? `Prossima scadenza ${relative(open[0].due_date)}.` : 'Nessuna scadenza in arrivo.'}</div></div></div>`;
   const rest = open.length ? group('Entro 30 giorni', month) + group('Più avanti', later) : '';
 
-  return { title: 'Scadenze', body: hero + shiftsTodayCard() + inboxCard() + todoBlock + mini + rest, fab: true };
+  return { title: 'Scadenze', body: hero + shiftsTodayCard() + inboxCard() + appointmentsCard() + todoBlock + mini + rest, fab: true };
 }
 
 /* --- pagina: sezione (Casa / Mezzi / Altro) --- */
@@ -1032,7 +1103,7 @@ function pageSection(cat) {
     };
   }
   const sum = costSummary(inCat(cat));
-  const famRow = items.filter((i) => itemType(i).shifts).length >= 2
+  const famRow = items.filter((i) => itemType(i).shifts).length >= 1
     ? `<button class="row" data-action="open-family">${tile('briefcase', cat)}<div class="main"><div class="t">Turni insieme</div><div class="s">Un solo calendario per tutti</div></div><span class="chev">${ic('next')}</span></button>` : '';
   const cards = famRow + items.map((it) => {
     const own = state.deadlines.filter((d) => d.item_id === it.id && !d.paid);
@@ -1292,7 +1363,10 @@ function openDeadlineForm(id, presetItemId, opts = {}) {
         <label>Scadenza<input type="date" name="due_date" required value="${dl?.due_date || pre.due_date || ''}"></label>
         <label>Importo (€)<input type="number" name="amount" step="0.01" min="0" inputmode="decimal" placeholder="se lo sai" value="${dl?.amount ?? pre.amount ?? ''}"></label>
       </div>
-      <label>Si ripete<select name="recurrence">${recOpts}</select></label>
+      <div class="row2">
+        <label>Ora (se serve)<input type="time" name="time" value="${esc(dl?.time || pre.time || '')}"></label>
+        <label>Si ripete<select name="recurrence">${recOpts}</select></label>
+      </div>
       <details class="more" ${pre.link || pre.note || dl?.link ? 'open' : ''}>
         <summary>Altre opzioni</summary>
         <label>Nome<input name="title" value="${esc(dl?.title || k.label)}" required></label>
@@ -1342,7 +1416,7 @@ async function onDeadlineSubmit(form) {
   const fields = {
     item_id: f.item_id.value, kind: f.kind.value, title: f.title.value.trim() || kindOf(f.kind.value).label,
     due_date: f.due_date.value, amount: f.amount.value === '' ? null : Number(f.amount.value),
-    recurrence: f.recurrence.value, note: f.note.value.trim() || null,
+    recurrence: f.recurrence.value, note: f.note.value.trim() || null, time: f.time.value || null,
     link: f.link.value.trim() ? safeUrl(f.link.value) : null,
   };
   if (f.link.value.trim() && !fields.link) { toast('Il link non è valido: deve iniziare con https://'); return; }
@@ -2089,7 +2163,7 @@ async function onJoinHousehold(form) {
 }
 
 /* ---------- eventi ---------- */
-const WRITE_ACTIONS = new Set(['fam-day', 'fam-quick', 'fam-reparti', 'fam-pick', 'fam-clear', 'fam-who', 'shift-day', 'shift-paint', 'shift-pick', 'shift-clear', 'shift-types', 'shift-cycle', 'new-shift-type', 'edit-shift-type', 'new-history', 'delete-history', 'new-deadline', 'new-item', 'new-log', 'edit-item', 'delete-item', 'hide-section', 'unhide-section', 'delete-deadline', 'delete-log', 'pay-form', 'reopen-form', 'inbox-add', 'inbox-paid', 'inbox-skip']);
+const WRITE_ACTIONS = new Set(['fam-day', 'fam-quick', 'fam-addperson', 'fam-reparti', 'fam-pick', 'fam-clear', 'fam-who', 'shift-day', 'shift-paint', 'shift-pick', 'shift-clear', 'shift-types', 'shift-cycle', 'new-shift-type', 'edit-shift-type', 'new-history', 'delete-history', 'new-deadline', 'new-item', 'new-log', 'edit-item', 'delete-item', 'hide-section', 'unhide-section', 'delete-deadline', 'delete-log', 'pay-form', 'reopen-form', 'inbox-add', 'inbox-paid', 'inbox-skip']);
 document.addEventListener('click', async (e) => {
   const el = e.target.closest('[data-action]');
   if (!el) return;
@@ -2109,7 +2183,9 @@ document.addEventListener('click', async (e) => {
     }
     case 'fam-pick': if (applyShift(el.dataset.item, el.dataset.day, el.dataset.type)) { render(); openFamilyDay(el.dataset.day); } break;
     case 'fam-clear': if (applyShift(el.dataset.item, el.dataset.day, null)) { render(); openFamilyDay(el.dataset.day); } break;
-    case 'fam-quick': openQuick(); break;
+    case 'fam-quick': if (id) state.famWho = id; openQuick(); break;
+    case 'quick-read': quickRead(); break;
+    case 'fam-addperson': openSheet('Aggiungi una persona', `<form id="fam-person-form" autocomplete="off"><label>Nome<input name="n" required maxlength="30" placeholder="es. Papà" list="fp-s"></label><datalist id="fp-s"><option value="Mamma"><option value="Papà"></datalist><div class="actions"><button class="btn" type="submit">Aggiungi</button></div></form>`); break;
     case 'photo-zoom': { const img = $('#quick-photo-img'); const w = parseInt(img.style.width || '260', 10); img.style.width = Math.max(100, Math.min(600, w + Number(el.dataset.z) * 80)) + '%'; break; }
     case 'fam-reparti': openReparti(el.dataset.mon); break;
     case 'fam-print': printFamily(); break;
@@ -2269,10 +2345,11 @@ document.addEventListener('input', onSecFormInput);
 document.addEventListener('change', (e) => {
   onDeadlineFormChange(e);
   onSecFormInput(e);
+  if (e.target.name === 'who' && e.target.closest('#quick-form')) { const c = e.target.closest('#quick-form').elements.cognome; if (c) c.value = byId(state.items, e.target.value)?.details?.cognome || ''; }
   if (e.target.id === 'import-file' && e.target.files[0]) importJSON(e.target.files[0]);
   if (e.target.id === 'quick-photo' && e.target.files[0]) {
     const img = $('#quick-photo-img'); if (img.dataset.url) URL.revokeObjectURL(img.dataset.url);
-    img.dataset.url = URL.createObjectURL(e.target.files[0]); img.src = img.dataset.url; img.style.width = '260%'; $('#quick-photo-box').hidden = false;
+    img.dataset.url = URL.createObjectURL(e.target.files[0]); img.src = img.dataset.url; img.style.width = '260%'; $('#quick-photo-box').hidden = false; $('#quick-read').hidden = MODE !== 'cloud';
   }
 });
 
@@ -2285,6 +2362,7 @@ document.addEventListener('submit', async (e) => {
     switch (form.id) {
       case 'dl-form': await onDeadlineSubmit(form); break;
       case 'noop': break;
+      case 'fam-person-form': { const n = form.elements.n.value.trim(); if (n && await saveItem(null, { name: /^turni/i.test(n) ? n : `Turni di ${n}`, category: 'altro', subtype: 'lavoro', details: { ident: {} } })) { closeSheetNow(); render(); toast('Aggiunta'); } break; }
       case 'item-form': await onItemSubmit(form); break;
       case 'sec-form': if (await onSectionSubmit(form)) { if (form.dataset.inbox) await resolveInbox(form.dataset.inbox, 'done'); if (seq) advanceSeq(); else { closeSheetNow(); render(); toast('Salvato'); } } break;
       case 'ident-form': if (await onIdentSubmit(form)) { if (seq && form.dataset.seq) advanceSeq(); else { closeSheetNow(); render(); toast('Salvato'); } } break;

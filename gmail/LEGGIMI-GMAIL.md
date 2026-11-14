@@ -43,3 +43,10 @@ Ripeti dal punto 1 per l'altra Gmail, con la **stessa chiave**.
 ```
 3. Esegui `provaSenzaInviare` e consenti i permessi. Quando i risultati sono giusti, esegui `installaControlloAutomatico` una volta sola.
 4. Una copia dello script per ogni Gmail (papà e mamma), con **la stessa chiave della posta**.
+
+---
+## Novità
+- **Appuntamenti:** lo script riconosce visite, prelievi, assemblee, riunioni e gli inviti di calendario (.ics), con **data, ora e luogo**. Compaiono in «Da confermare» come «Appuntamento» e, una volta aggiunti, in Home → «Prossimi appuntamenti».
+- **Meno errori:** preventivi, codici di accesso, newsletter e mail senza oggetto non diventano più scadenze. Ogni proposta dice «Dalla mail …» e perché ha letto quella data.
+- **Prima scansione:** `provaUltimi60Giorni` (vedi cosa trova, senza inviare) e poi `primaScansione` (invia; rilancia finché dice «finito»).
+- **Lettura con intelligenza artificiale (facoltativa):** in cima allo script metti `AI_FORNITORE = 'claude'` (o `'gemini'`) e la chiave in `AI_CHIAVE`. Solo le mail che sembrano contenere scadenze o appuntamenti vengono inviate, come testo, al servizio scelto. Se l'IA non risponde, restano le regole. Lasciando `''` nulla esce da Google.

@@ -532,8 +532,14 @@ a.chip { text-decoration: none; display: inline-flex; align-items: center; }
   .topbar { position: sticky; }
   .topbar .bar h1 { font-size: 24px; }
   /* elenchi e schede su due colonne */
-  .list { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; align-items: stretch; }
-  .list > .row { margin: 0; }
+  main .list { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; align-items: stretch; background: transparent; box-shadow: none; overflow: visible; border-radius: 0; }
+  main .list > .row { background: var(--card); box-shadow: var(--shadow); border: 0; border-radius: var(--radius); padding: 15px 18px; }
+  main .list > .row:hover { background: color-mix(in srgb, var(--card) 92%, var(--accent)); cursor: pointer; }
+  main .list > .row.done { opacity: .7; }
+  .hero { padding: 26px 30px; }
+  .hero .big { font-size: 46px; }
+  .minis { gap: 14px; }
+  .card { padding: 20px 24px; }
   .scards { grid-template-columns: repeat(3, minmax(0, 1fr)); }
   .fab { right: 40px; bottom: 32px; }
   #toast { bottom: 40px; left: calc(50% + var(--side-w) / 2); }
@@ -553,4 +559,24 @@ a.chip { text-decoration: none; display: inline-flex; align-items: center; }
   .fam-cell { min-height: 96px; padding: 6px 5px; }
   .fam-pill { font-size: 15px; padding: 6px 0; }
   .sh-palette { gap: 8px; }
+}
+
+/* ---- v7: spaziatura sotto i bottoni, motivo della proposta ---- */
+.actions + .card, .actions + .group-title, .list + .actions + .card { margin-top: 24px; }
+.inb-why { font-size: 13px; color: var(--muted); font-style: italic; margin: 2px 0 4px; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; line-clamp: 2; overflow: hidden; }
+.addp { display: grid; gap: 8px; }
+.addp p { margin: 0; }
+
+/* ---- v8 ---- */
+.inb-k { font-size: 11.5px; font-weight: 800; letter-spacing: .06em; text-transform: uppercase; color: var(--accent); margin-bottom: 2px; }
+.inb-from { font-size: 13px; color: var(--muted); margin-top: 3px; overflow-wrap: anywhere; }
+#quick-read-msg { white-space: pre-wrap; }
+@media (min-width: 900px) and (hover: hover) {
+  /* su PC ogni riga è una scheda a sé, non due righe incollate dentro lo stesso riquadro */
+  .list { background: transparent; box-shadow: none; border-radius: 0; gap: 12px; overflow: visible; }
+  .list > .row { background: var(--card); border-radius: 18px; box-shadow: var(--shadow); border-bottom: 0; }
+  .list > .row + .row { border-top: 0; }
+  .list.rep-list > .row, .list.one { grid-template-columns: 1fr; }
+  .actions { margin-bottom: 8px; }
+  .actions + .card, .actions + .group-title, .list + .actions + .card { margin-top: 28px; }
 }

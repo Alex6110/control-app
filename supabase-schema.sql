@@ -434,3 +434,30 @@ create policy "shifts_read" on public.shifts for select to authenticated using (
 create policy "shifts_ins"  on public.shifts for insert to authenticated with check (public.can_edit(household_id));
 create policy "shifts_upd"  on public.shifts for update to authenticated using (public.can_edit(household_id)) with check (public.can_edit(household_id));
 create policy "shifts_del"  on public.shifts for delete to authenticated using (public.can_edit(household_id));
+
+
+-- ============================================================
+-- v7: orario negli appuntamenti. Additivo e rilanciabile.
+-- ============================================================
+alter table public.deadlines add column if not exists "time" text;
+alter table public.inbox add column if not exists "time" text;
+
+create or replace function public.submit_inbox(p_token text, p_rows jsonb)
+returns integer language plpgsql security definer set search_path = public as $$
+declare h uuid; r jsonb; n integer := 0;
+begin
+  select id into h from public.households where inbox_token = p_token;
+  if h is null then raise exception 'token non valido'; end if;
+  if jsonb_typeof(p_rows) <> 'array' or jsonb_array_length(p_rows) > 50 then raise exception 'dati non validi'; end if;
+  for r in select * from jsonb_array_elements(p_rows) loop
+    insert into public.inbox (household_id, ext_id, sender, subject, kind, title, due_date, "time", amount, plate, ref, link, note, paid_hint)
+    values (
+      h, left(r->>'ext_id', 200), left(r->>'sender', 200), left(r->>'subject', 300), left(r->>'kind', 40), left(r->>'title', 200),
+      nullif(r->>'due_date', '')::date, left(nullif(r->>'time', ''), 5), nullif(r->>'amount', '')::numeric, left(upper(r->>'plate'), 12), left(r->>'ref', 80),
+      left(r->>'link', 500), left(r->>'note', 500), coalesce((r->>'paid_hint')::boolean, false)
+    ) on conflict (household_id, ext_id) do nothing;
+    if found then n := n + 1; end if;
+  end loop;
+  return n;
+end $$;
+grant execute on function public.submit_inbox(text, jsonb) to anon, authenticated;

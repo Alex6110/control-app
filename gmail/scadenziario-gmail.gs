@@ -19,6 +19,14 @@ var SUPABASE_ANON_KEY = 'INCOLLA_LA_CHIAVE_ANON'; // la stessa di config.js
 var INBOX_TOKEN = 'INCOLLA_LA_CHIAVE_DELLA_POSTA'; // App → Impostazioni → Posta automatica → Copia la chiave
 // ====================================
 
+// ====== FACOLTATIVO: lettura con intelligenza artificiale (più precisa) ======
+// Lascia '' per usare solo le regole del programma (nessun dato esce da Google).
+// Con 'claude' o 'gemini' le mail che sembrano contenere scadenze/appuntamenti vengono
+// inviate (testo, senza allegati immagine) al servizio scelto per essere interpretate.
+var AI_FORNITORE = '';   // '' | 'claude' | 'gemini'
+var AI_CHIAVE = '';      // la chiave API del servizio scelto
+// ===============================================================================
+
 var GIORNI_INDIETRO = 3;        // quanti giorni di posta guardare
 var MAX_MAIL_PER_GIRO = 30;
 var MAX_PDF_BYTES = 6 * 1024 * 1024;
@@ -41,8 +49,16 @@ var TIPI = [ // [id, etichetta, regex]  (l'ordine conta: il primo che trova vinc
   ['acqua', 'Bolletta acqua', /servizio idrico|\bacqua\b|\bacquedotto\b|\biren\b|\bacea\b|\bhera\b.*acqua/i],
   ['internet', 'Internet', /fibra|internet|\badsl\b|\bwi-?fi\b|\btim\b|\bvodafone\b|\bfastweb\b|\bwind\s?tre\b|\biliad\b|\bsky\s?wifi\b/i],
   ['condominio', 'Condominio', /condomini|amministratore di condominio/i],
+  ['documento', 'Documento in scadenza', /\bspid\b|posteid|carta d.identit|passaporto|\bpatente\b|tessera sanitaria|firma digitale|certificato digitale/i],
   ['abbonamento', 'Abbonamento', /abbonamento|rinnovo (?:automatico|dell)|canone/i],
 ];
+// Mail da NON proporre mai come scadenza (preventivi, codici, accessi, sondaggi…)
+var NEGATIVI = /preventiv|quotazione|codice (?:di )?(?:verifica|accesso|sicurezza)|\botp\b|nuovo accesso|accesso eseguito|reimposta (?:la )?password|conferma (?:la tua )?(?:registrazione|iscrizione)|benvenut[oa]|sondaggio|questionario|ti piace|valuta (?:il|la|l')|recensione/i;
+var AUTOLETTURA = /autolettura/i;
+// Appuntamenti
+var APPUNT = /appuntament|prenotazion|prenotat[oa]|visita (?:medica|specialistica|di controllo|ambulatoriale|oculistica|cardiologica)|\bvisita\b|\bprelievo\b|ecografia|\besame\b|vaccin|colloquio|\briunione\b|assemblea|convocazione|sopralluogo|intervento (?:tecnico|programmato)|ritiro (?:referto|documenti)|\bseduta\b/i;
+var ORA = /(?:\bore\b|\balle\b|\bh\b|dalle)\s*(\d{1,2})(?:[:.h](\d{2}))?|\b([01]?\d|2[0-3]):([0-5]\d)\b/i;
+var LUOGO = /(?:presso|luogo|sede|ambulatorio|ospedale|studio|indirizzo)\s*[:\-]?\s*([A-ZÀ-Ý0-9][^\n.;]{3,70})|\b((?:in |a )?(?:via|viale|piazza|corso|largo|lungomare)\s+[A-ZÀ-Ýa-zà-ý' ]{2,40}\s*,?\s*\d{0,4}[^\n.;]{0,20})/i;
 var RICEVUTA = /quietanza|ricevuta di pagamento|pagamento (?:\S+ )?(?:ricevuto|effettuato|completato|andato a buon fine)|abbiamo ricevuto (?:il |l')?(?:suo )?pagamento|grazie per (?:aver pagato|il pagamento)/i;
 var PROMO = /disiscriv|annulla (?:la )?(?:tua )?iscrizione|unsubscribe|newsletter|\bsconti?\b|\boffert[ae]\b|\bpromo(?:zione)?\b|\bsaldi\b|black friday|\bcoupon\b|risparmia/i;
 var SCAD = /scadenz|da pagare entro|entro il|pagabile entro|data limite|termine di pagamento/i;
@@ -85,10 +101,73 @@ var TARGA_MOTO = /\b([A-Z]{2})\s?(\d{5})\b/;
 
 var TIPI_VEICOLO = { bollo: 1, revisione: 1, tagliando: 1, assicurazione: 1 };
 
-function trovaTipo(t) {
-  for (var i = 0; i < TIPI.length; i++) if (TIPI[i][2].test(t)) return { id: TIPI[i][0], label: TIPI[i][1] };
+function trovaTipo(t, minimo) {
+  for (var i = 0; i < TIPI.length; i++) {
+    var debole = { condominio: 1, abbonamento: 1, internet: 1, acqua: 1, documento: 1, rifiuti: 1 }[TIPI[i][0]];
+    if (!minimo || !debole) { if (TIPI[i][2].test(t)) return { id: TIPI[i][0], label: TIPI[i][1] }; continue; }
+    var re = new RegExp(TIPI[i][2].source, 'gi'), n = 0;
+    while (re.exec(t)) n++;
+    if (n >= minimo) return { id: TIPI[i][0], label: TIPI[i][1] };
+  }
   return null;
 }
+
+// Frammento di testo attorno a un punto, per spiegare "perché l'ho proposta".
+function attorno(t, i, len) {
+  var a = Math.max(0, i - 45), b = Math.min(t.length, i + len + 25);
+  return ('…' + t.slice(a, b).replace(/\s+/g, ' ').trim() + '…').slice(0, 140);
+}
+
+function trovaOra(t) {
+  var m = ORA.exec(t); if (!m) return null;
+  var h = m[1] != null ? +m[1] : +m[3], mi = m[2] != null ? +m[2] : (m[4] != null ? +m[4] : 0);
+  if (h > 23 || mi > 59) return null;
+  return ('0' + h).slice(-2) + ':' + ('0' + mi).slice(-2);
+}
+
+function pulisciOggetto(o) { return String(o || '').replace(/^\s*((re|r|fwd|fw|i)\s*:\s*)+/i, '').replace(/^\s*(promemoria|reminder)\s*[:\-]\s*/i, '').replace(/\s+/g, ' ').trim(); }
+
+// ICS (inviti di calendario): restituisce {due_date, time, title, place} o null
+function leggiIcs(txt) {
+  var m = /DTSTART[^:\n]*:(\d{4})(\d{2})(\d{2})(?:T(\d{2})(\d{2})\d{2}(Z?))?/.exec(txt || ''); if (!m) return null;
+  var y = +m[1], mo = +m[2], d = +m[3], hh = m[4] != null ? +m[4] : null, mm = m[5] != null ? +m[5] : 0;
+  if (m[6] === 'Z' && hh != null) {
+    var dt = new Date(Date.UTC(y, mo - 1, d, hh, mm));
+    try { var f = new Intl.DateTimeFormat('sv-SE', { timeZone: 'Europe/Rome', year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hour12: false }).format(dt); var q = /(\d{4})-(\d{2})-(\d{2})\D+(\d{2}):(\d{2})/.exec(f); y = +q[1]; mo = +q[2]; d = +q[3]; hh = +q[4]; mm = +q[5]; }
+    catch (e) { dt = new Date(dt.getTime() + 3600000); y = dt.getUTCFullYear(); mo = dt.getUTCMonth() + 1; d = dt.getUTCDate(); hh = dt.getUTCHours(); mm = dt.getUTCMinutes(); }
+  }
+  var s = /SUMMARY[^:\n]*:([^\r\n]+)/.exec(txt), l = /LOCATION[^:\n]*:([^\r\n]+)/.exec(txt);
+  return { due_date: iso(y, mo, d), time: hh != null ? ('0' + hh).slice(-2) + ':' + ('0' + mm).slice(-2) : null, title: s ? s[1].replace(/\\,/g, ',').trim() : '', place: l ? l[1].replace(/\\,/g, ',').trim() : '' };
+}
+
+// Se la mail parla di un appuntamento restituisce la proposta, altrimenti null.
+function trovaAppuntamento(msg, t, date, base) {
+  var ogg = pulisciOggetto(msg.oggetto);
+  var ics = leggiIcs(msg.ics);
+  var haParola = APPUNT.test(ogg) || (APPUNT.test(t.slice(0, 1500)) && ORA.test(t));
+  if (!ics && !haParola) return null;
+  var d = ics && ics.due_date ? ics.due_date : null, i0 = 0;
+  if (!d) {
+    var dOgg = trovaDate(ogg)[0];
+    var cand = dOgg ? { d: dOgg.d, i: 0 } : (date.filter(function (x) { return !oggiPassata(x.d, msg.oggi); })[0] || null);
+    if (!cand) return null;
+    d = cand.d; i0 = cand.i;
+    // se nel testo la stessa data compare ancora, l'ora si cerca lì (es. «il giorno 25 novembre alle ore 18:30»)
+    date.forEach(function (x) { if (x.d === d && x.i > ogg.length + 2) i0 = x.i; });
+  }
+  if (oggiPassata(d, msg.oggi)) return null;
+  var ora = ics && ics.time ? ics.time : (trovaOra(t.slice(i0, i0 + 400)) || trovaOra(t));
+  var lm = LUOGO.exec(String(msg.corpo || '') + '\n' + String(msg.allegati ? msg.allegati.join('\n') : '')); var luogo = ics && ics.place ? ics.place : (lm ? (lm[1] || lm[2] || '').trim() : '');
+  var testa = ogg + ' ' + t.slice(0, 700), mt;
+  var titolo = /assemblea/i.test(testa) ? 'Assemblea condominio' : /prelievo/i.test(testa) ? 'Prelievo'
+    : (mt = /visita\s+(medica|specialistica|di controllo|ambulatoriale|[a-zà-ý]+ica|[a-zà-ý]+ologica)/i.exec(testa)) ? 'Visita ' + mt[1].toLowerCase()
+    : (mt = /ecografia|esame|vaccin\w*|colloquio|sopralluogo|riunione/i.exec(testa)) ? mt[0].charAt(0).toUpperCase() + mt[0].slice(1).toLowerCase()
+    : (ics && ics.title) ? ics.title : (ogg && ogg.length <= 50 && !/^(appuntament|promemoria|prenotazion|convocazion|invito)/i.test(ogg)) ? ogg : 'Appuntamento';
+  return { ext_id: base.ext + ':a', sender: base.sender, subject: base.subject, kind: 'appuntamento', title: titolo + ' · ' + base.sender,
+    due_date: d, time: ora, amount: null, plate: null, ref: null, link: base.link, paid_hint: false,
+    note: (luogo ? 'Luogo: ' + luogo.slice(0, 80) + '. ' : '') + (ics ? 'Dall\'invito di calendario.' : 'Data e ora lette dal testo della mail.') };
+}
+function oggiPassata(d, oggi) { return !!oggi && d < oggi; }
 
 function nomeMittente(from) {
   var m = /^\s*"?([^"<]+?)"?\s*<([^>]+)>/.exec(from || '');
@@ -108,13 +187,30 @@ function nomeMittente(from) {
 function analizza(msg) {
   var allegati = (msg.allegati || []).join('\n');
   var t = ((msg.oggetto || '') + '\n' + (msg.corpo || '') + '\n' + allegati).replace(/[ \t\u00a0]+/g, ' ');
-  // il tipo si decide prima dall'oggetto, poi dal mittente, e solo per ultimo dal testo
-  var tipo = trovaTipo(msg.oggetto || '') || trovaTipo(msg.mittente || '') || trovaTipo((msg.corpo || '') + ' ' + allegati);
+  var oggetto = msg.oggetto || '';
+  var sintetico = !oggetto.trim();
+  if (sintetico) { oggetto = ((msg.corpo || '').split('\n').filter(function (r) { return r.trim(); })[0] || '').slice(0, 120); msg = Object.assign({}, msg, { oggetto: oggetto }); }
+  if (NEGATIVI.test(oggetto)) return [];
+  var base0 = { sender: nomeMittente(msg.mittente), subject: oggetto.slice(0, 250), link: msg.link || '', ext: msg.id };
+  var dateT = trovaDate(t);
+  // appuntamenti (anche dagli inviti di calendario)
+  var ap = trovaAppuntamento(msg, t, dateT, base0);
+  if (ap && !(PROMO.test(oggetto) && !msg.ics)) return [ap];
+  if (NEGATIVI.test(t.slice(0, 600))) return [];
+  // autolettura: non è un pagamento ma una cosa da fare entro una data
+  if (AUTOLETTURA.test(oggetto)) {
+    var dl = dateT.filter(function (x) { return SCAD.test(attorno(t, x.i, x.len)) || true; })[0];
+    var tp = trovaTipo(oggetto + ' ' + (msg.mittente || '')) || trovaTipo(t, 2);
+    if (dl && oggiPassata(dl.d, msg.oggi)) dl = null;
+    return dl ? [{ ext_id: msg.id + ':l', sender: base0.sender, subject: base0.subject, kind: 'altro', title: 'Autolettura' + (tp ? ' ' + tp.label.replace(/^Bolletta /, '') : '') + ' · ' + base0.sender, due_date: dl.d, time: null, amount: null, plate: null, ref: null, link: base0.link, paid_hint: false, note: 'Da comunicare entro la data indicata ' + attorno(t, dl.i, dl.len) }] : [];
+  }
+  // il tipo si decide prima dall'oggetto, poi dal mittente, e dal testo solo con prove forti (2 citazioni)
+  var tipo = (sintetico ? null : trovaTipo(oggetto)) || trovaTipo(msg.mittente || '') || trovaTipo((msg.corpo || '') + ' ' + allegati, 2);
   if (!tipo) return [];
   var ricevuta = RICEVUTA.test(t) && !/in scadenza|le ricord|scadenza (?:rata|della)/i.test(t);
   var date = trovaDate(t);
   var promo = PROMO.test(t);
-  var base = { sender: nomeMittente(msg.mittente), subject: (msg.oggetto || '').slice(0, 250), kind: tipo.id, link: msg.link || '', ext: msg.id, paid_hint: ricevuta };
+  var base = { sender: base0.sender, subject: base0.subject, kind: tipo.id, link: msg.link || '', ext: msg.id, paid_hint: ricevuta };
   var righe = [];
 
   // 1) tabelle del tipo "polizza  targa  data  importo" (una riga = una scadenza)
@@ -135,14 +231,14 @@ function analizza(msg) {
     if (!best && date.length === 1) best = date[0];
     var ref = (/(?:polizza|contratto|cliente|fattura|utenza)\s*(?:n[°o.]?|numero|nr\.?)?\s*[:\s]\s*([A-Z0-9\/\-]{6,20})/i.exec(t) || [])[1] || '';
     var targa = (TARGA.exec(t) || TARGA_MOTO.exec(t) || [])[0] || '';
-    if (best || ricevuta) righe.push({ due_date: best ? best.d : null, amount: trovaImporto(t), plate: targa.replace(/\s/g, ''), ref: ref });
+    if (best || ricevuta) righe.push({ due_date: best ? best.d : null, amount: trovaImporto(t), plate: targa.replace(/\s/g, ''), ref: ref, why: best ? 'Data presa da ' + attorno(t, best.i, best.len) : '' });
   }
   if (!righe.length) return [];
   var assemblea = tipo.id === 'condominio' && /assemblea|convocazione/i.test(msg.oggetto || '');
   if (assemblea) {
     var dOgg = trovaDate(msg.oggetto || '')[0];
     var dTesto = dOgg || date[0];
-    righe = [{ due_date: dTesto ? dTesto.d : null, amount: null, plate: '', ref: '' }];
+    righe = [{ due_date: dTesto ? dTesto.d : null, amount: null, plate: '', ref: '', why: '' }];
     tipo = { id: 'condominio', label: 'Assemblea condominio' };
   }
   if (!TIPI_VEICOLO[tipo.id]) righe.forEach(function (r) { r.plate = ''; });
@@ -153,10 +249,67 @@ function analizza(msg) {
     var etichetta = ricevuta ? 'Pagamento ricevuto' : (tipo.id === 'assicurazione' && /rat[ae]/i.test(t) ? 'Rata assicurazione' : tipo.label);
     return {
       ext_id: base.ext + ':' + n, sender: base.sender, subject: base.subject, kind: base.kind,
-      title: etichetta + ' · ' + base.sender, due_date: r.due_date, amount: r.amount, plate: r.plate || null, ref: r.ref || null,
-      link: base.link, note: null, paid_hint: base.paid_hint,
+      title: etichetta + ' · ' + base.sender, due_date: r.due_date, time: null, amount: r.amount, plate: r.plate || null, ref: r.ref || null,
+      link: base.link, note: r.why || null, paid_hint: base.paid_hint,
     };
   });
+}
+
+/* ---------------------------------------------------------------
+ * PARTE 1b – lettura con intelligenza artificiale (facoltativa)
+ * ------------------------------------------------------------- */
+var CATEGORIE_AI = ['bollo', 'revisione', 'tagliando', 'assicurazione', 'imu', 'rifiuti', 'luce', 'gas', 'acqua', 'internet', 'condominio', 'abbonamento', 'documento', 'altro'];
+
+function promptAI(msg, testo, oggi) {
+  return 'Sei l\'assistente di una famiglia italiana che tiene sotto controllo scadenze e appuntamenti. Leggi la mail e decidi cosa contiene.\n' +
+    'Rispondi SOLO con un oggetto JSON, senza altro testo:\n' +
+    '{"tipo":"scadenza|appuntamento|pagato|niente","categoria":"' + CATEGORIE_AI.join('|') + '","titolo":"max 60 caratteri, in italiano","data":"AAAA-MM-GG oppure null","ora":"HH:MM oppure null","importo":numero oppure null,"targa":"oppure null","luogo":"oppure null","motivo":"una frase: cosa hai letto che ti fa dire questo"}\n' +
+    'Regole: «scadenza» = qualcosa da pagare o rinnovare entro una data; «appuntamento» = visita, riunione, assemblea, intervento con data/ora; «pagato» = conferma di un pagamento già fatto; ' +
+    '«niente» = pubblicità, preventivi, newsletter, codici di accesso, avvisi generici, promemoria senza data precisa. Non inventare mai date, ore o importi: se non sono scritti nella mail metti null. Se ci sono più date usa quella della scadenza o dell\'appuntamento, non quella di emissione. Oggi è ' + oggi + '.\n\n' +
+    'DA: ' + (msg.mittente || '') + '\nOGGETTO: ' + (msg.oggetto || '') + '\nTESTO:\n' + testo;
+}
+
+// Trasforma la risposta dell'IA in una proposta (o null se «niente» / risposta non valida).
+function leggiRispostaAI(txt, base) {
+  var j; try { j = JSON.parse(String(txt).replace(/^[^{]*/, '').replace(/[^}]*$/, '')); } catch (e) { return undefined; }
+  if (!j || !j.tipo) return undefined;
+  if (j.tipo === 'niente') return null;
+  var data = /^\d{4}-\d{2}-\d{2}$/.test(j.data || '') ? j.data : null;
+  var ora = /^\d{2}:\d{2}$/.test(j.ora || '') ? j.ora : null;
+  var cat = j.tipo === 'appuntamento' ? 'appuntamento' : (CATEGORIE_AI.indexOf(j.categoria) >= 0 ? j.categoria : 'altro');
+  if (j.tipo !== 'pagato' && !data) return null;
+  var imp = typeof j.importo === 'number' && j.importo > 0 ? j.importo : null;
+  var luogo = j.luogo ? 'Luogo: ' + String(j.luogo).slice(0, 80) + '. ' : '';
+  return { ext_id: base.ext + ':ai', sender: base.sender, subject: base.subject, kind: cat, title: String(j.titolo || base.subject).slice(0, 80) + ' · ' + base.sender,
+    due_date: data, time: ora, amount: imp, plate: j.targa ? String(j.targa).replace(/\s/g, '').toUpperCase().slice(0, 10) : null, ref: null, link: base.link,
+    paid_hint: j.tipo === 'pagato', note: (luogo + (j.motivo ? String(j.motivo).slice(0, 160) : '')).slice(0, 300) || null };
+}
+
+// Chiama il servizio scelto. Restituisce undefined se qualcosa non va (si usano allora le regole).
+function chiediAI(msg, testo, oggi) {
+  var p = promptAI(msg, testo.slice(0, 7000), oggi), res, out;
+  try {
+    if (AI_FORNITORE === 'claude') {
+      res = UrlFetchApp.fetch('https://api.anthropic.com/v1/messages', { method: 'post', contentType: 'application/json', muteHttpExceptions: true,
+        headers: { 'x-api-key': AI_CHIAVE, 'anthropic-version': '2023-06-01' },
+        payload: JSON.stringify({ model: 'claude-haiku-5-5', max_tokens: 500, messages: [{ role: 'user', content: p }] }) });
+      if (res.getResponseCode() >= 300) { Logger.log('IA: errore ' + res.getResponseCode() + ' ' + res.getContentText().slice(0, 200)); return undefined; }
+      out = (JSON.parse(res.getContentText()).content || []).map(function (c) { return c.text || ''; }).join('');
+    } else if (AI_FORNITORE === 'gemini') {
+      res = UrlFetchApp.fetch('https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent', { method: 'post', contentType: 'application/json', muteHttpExceptions: true,
+        headers: { 'x-goog-api-key': AI_CHIAVE },
+        payload: JSON.stringify({ contents: [{ parts: [{ text: p }] }], generationConfig: { responseMimeType: 'application/json', temperature: 0 } }) });
+      if (res.getResponseCode() >= 300) { Logger.log('IA: errore ' + res.getResponseCode() + ' ' + res.getContentText().slice(0, 200)); return undefined; }
+      var jr = JSON.parse(res.getContentText()); out = (((jr.candidates || [])[0] || {}).content || {}).parts; out = (out || []).map(function (x) { return x.text || ''; }).join('');
+    } else return undefined;
+  } catch (e) { Logger.log('IA: ' + e); return undefined; }
+  return out;
+}
+
+// Mail che vale la pena far leggere all'IA (le altre non escono da Google).
+function sembraUtile(msg, testo) {
+  if (NEGATIVI.test(msg.oggetto || '') && !APPUNT.test(msg.oggetto || '')) return false;
+  return TIPI.some(function (t) { return t[2].test((msg.oggetto || '') + ' ' + (msg.mittente || '')); }) || APPUNT.test(msg.oggetto || '') || (SCAD.test(testo) && trovaDate(testo).length > 0) || (APPUNT.test(testo.slice(0, 1500)) && ORA.test(testo));
 }
 
 /* ---------------------------------------------------------------
@@ -193,12 +346,22 @@ function raccogli(giorni, soloNuove) {
       var id = m.getId();
       if ((soloNuove !== false && visti.indexOf(id) >= 0) || n >= MAX_MAIL_PER_GIRO) return;
       n++; idsNuovi.push(id);
-      var allegati = [];
+      var allegati = [], ics = '';
       m.getAttachments({ includeInlineImages: false }).forEach(function (a) {
         if (/pdf/i.test(a.getContentType())) allegati.push(testoDaPdf(a.copyBlob()));
+        else if (/calendar|\.ics$/i.test(a.getContentType() + ' ' + a.getName())) { try { ics += a.getDataAsString(); } catch (e) {} }
       });
       var link = 'https://mail.google.com/mail/?authuser=' + encodeURIComponent(email) + '#all/' + th.getId();
-      var r = analizza({ id: id, mittente: m.getFrom(), oggetto: m.getSubject(), corpo: m.getPlainBody().slice(0, 20000), allegati: allegati, link: link });
+      var msgObj = { id: id, mittente: m.getFrom(), oggetto: m.getSubject(), corpo: m.getPlainBody().slice(0, 20000), allegati: allegati, ics: ics, oggi: Utilities.formatDate(new Date(), 'Europe/Rome', 'yyyy-MM-dd'), link: link };
+      var r = analizza(msgObj);
+      if (AI_FORNITORE && AI_CHIAVE) {
+        var testoIA = (msgObj.corpo || '') + '\n' + (msgObj.allegati || []).join('\n').slice(0, 4000);
+        if (sembraUtile(msgObj, testoIA)) {
+          var ris = chiediAI(msgObj, testoIA, msgObj.oggi);
+          var prop = ris === undefined ? undefined : leggiRispostaAI(ris, { ext: id, sender: nomeMittente(msgObj.mittente), subject: (msgObj.oggetto || '').slice(0, 250), link: link });
+          if (prop !== undefined) r = prop ? [prop] : [];   // l'IA decide; se non risponde restano le regole
+        }
+      }
       r.forEach(function (x) { righe.push(x); });
     });
   });
@@ -252,4 +415,4 @@ function installaControlloAutomatico() {
   Logger.log('Fatto: da ora la posta viene controllata ogni 10 minuti.');
 }
 
-if (typeof module !== 'undefined') module.exports = { analizza: analizza, trovaDate: trovaDate, trovaImporto: trovaImporto };
+if (typeof module !== 'undefined') module.exports = { leggiRispostaAI: leggiRispostaAI, promptAI: promptAI, sembraUtile: sembraUtile, analizza: analizza, leggiIcs: leggiIcs, trovaDate: trovaDate, trovaImporto: trovaImporto };

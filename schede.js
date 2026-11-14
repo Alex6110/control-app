@@ -360,6 +360,7 @@
         groups: [{ title: 'Salute', ids: ['vaccino_animale', 'antiparassitario', 'visita_vet'] }, { title: 'Altro', ids: ['assicurazione'] }],
         core: ['vaccino_animale', 'antiparassitario', 'visita_vet'],
       },
+      list('appuntamenti', 'Appuntamenti', 'calendar', 'es. Appuntamenti', ['appuntamento', 'visita', 'altro'], 'Aggiungi un appuntamento', { defName: 'Appuntamenti' }),
       list('abbonamenti', 'Abbonamenti', 'repeat', 'es. Streaming e palestra', ['abbonamento', 'telefono', 'internet'], 'Aggiungi un abbonamento', { defName: 'Abbonamenti' }),
       list('garanzie', 'Garanzie', 'box', 'es. Elettrodomestici', ['garanzia'], 'Aggiungi una garanzia', { defName: 'Garanzie' }),
       list('fisco', 'Tasse e fisco', 'percent', 'es. Tasse', ['dichiarazione', 'isee', 'tassa'], 'Aggiungi una scadenza fiscale', { defName: 'Tasse e fisco' }),
@@ -389,6 +390,7 @@
   ];
 
   const EXTRA_KINDS = [
+    xk('appuntamento', 'Appuntamento', 'calendar', 'none'),
     xk('finanziamento', 'Finanziamento', 'wallet', 'monthly'), xk('mutuo', 'Mutuo', 'landmark', 'monthly'),
     xk('contratto', 'Contratto', 'file', 'none'),
     xk('identita', 'Carta d\'identità', 'idcard', 'none'), xk('patente', 'Patente', 'idcard', 'none'),

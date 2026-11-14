@@ -99,3 +99,9 @@ Se cambi icona o aggiorni l'app e il telefono mostra ancora la vecchia, elimina 
 - Titolo del mese nel calendario leggibile anche su iPhone; reparto di ogni settimana (anche in stampa); «Compila dal foglio» con la foto del foglio come guida (resta sul telefono).
 - Versione per computer (schermo largo): barra a sinistra, finestre al centro, elenchi a due colonne. Su telefono non cambia nulla.
 - Script Gmail: `primaScansione` (ultimi 60 giorni) e `provaUltimi60Giorni`.
+
+## v8
+- Da rilanciare in Supabase (SQL Editor): `supabase-schema.sql` (il blocco v7 aggiunge l'orario agli appuntamenti).
+- «Compila dal foglio» è anche nella pagina di ogni persona; «Leggi la riga dalla foto» richiede la funzione `leggi-turni` (vedi `supabase/functions/leggi-turni/LEGGIMI.md`).
+- Posta: appuntamenti con ora e luogo, meno falsi positivi, lettura IA facoltativa (vedi `gmail/LEGGIMI-GMAIL.md`).
+- PC: ogni voce è una scheda; spaziatura sotto «Aggiungi».
