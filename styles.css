@@ -580,3 +580,6 @@ a.chip { text-decoration: none; display: inline-flex; align-items: center; }
   .actions { margin-bottom: 8px; }
   .actions + .card, .actions + .group-title, .list + .actions + .card { margin-top: 28px; }
 }
+
+.inb-dupe { display: flex; align-items: center; gap: 6px; font-size: 13px; font-weight: 650; color: #b45309; background: color-mix(in srgb, #f59e0b 16%, transparent); border-radius: 10px; padding: 6px 10px; margin-bottom: 6px; }
+.inb-dupe svg { width: 16px; height: 16px; flex: none; }

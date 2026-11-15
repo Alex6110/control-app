@@ -1,6 +1,6 @@
 // Service worker: fa funzionare l'app anche offline.
 // Cambia VERSION quando pubblichi una nuova versione per forzare l'aggiornamento.
-const VERSION = "v10";
+const VERSION = "v11";
 const SHELL = "scadenziario-shell-" + VERSION;
 const RUNTIME = "scadenziario-runtime-" + VERSION;
 const FILES = [

@@ -19,14 +19,6 @@ var SUPABASE_ANON_KEY = 'INCOLLA_LA_CHIAVE_ANON'; // la stessa di config.js
 var INBOX_TOKEN = 'INCOLLA_LA_CHIAVE_DELLA_POSTA'; // App → Impostazioni → Posta automatica → Copia la chiave
 // ====================================
 
-// ====== FACOLTATIVO: lettura con intelligenza artificiale (più precisa) ======
-// Lascia '' per usare solo le regole del programma (nessun dato esce da Google).
-// Con 'claude' o 'gemini' le mail che sembrano contenere scadenze/appuntamenti vengono
-// inviate (testo, senza allegati immagine) al servizio scelto per essere interpretate.
-var AI_FORNITORE = '';   // '' | 'claude' | 'gemini'
-var AI_CHIAVE = '';      // la chiave API del servizio scelto
-// ===============================================================================
-
 var GIORNI_INDIETRO = 3;        // quanti giorni di posta guardare
 var MAX_MAIL_PER_GIRO = 30;
 var MAX_PDF_BYTES = 6 * 1024 * 1024;
@@ -256,63 +248,6 @@ function analizza(msg) {
 }
 
 /* ---------------------------------------------------------------
- * PARTE 1b – lettura con intelligenza artificiale (facoltativa)
- * ------------------------------------------------------------- */
-var CATEGORIE_AI = ['bollo', 'revisione', 'tagliando', 'assicurazione', 'imu', 'rifiuti', 'luce', 'gas', 'acqua', 'internet', 'condominio', 'abbonamento', 'documento', 'altro'];
-
-function promptAI(msg, testo, oggi) {
-  return 'Sei l\'assistente di una famiglia italiana che tiene sotto controllo scadenze e appuntamenti. Leggi la mail e decidi cosa contiene.\n' +
-    'Rispondi SOLO con un oggetto JSON, senza altro testo:\n' +
-    '{"tipo":"scadenza|appuntamento|pagato|niente","categoria":"' + CATEGORIE_AI.join('|') + '","titolo":"max 60 caratteri, in italiano","data":"AAAA-MM-GG oppure null","ora":"HH:MM oppure null","importo":numero oppure null,"targa":"oppure null","luogo":"oppure null","motivo":"una frase: cosa hai letto che ti fa dire questo"}\n' +
-    'Regole: «scadenza» = qualcosa da pagare o rinnovare entro una data; «appuntamento» = visita, riunione, assemblea, intervento con data/ora; «pagato» = conferma di un pagamento già fatto; ' +
-    '«niente» = pubblicità, preventivi, newsletter, codici di accesso, avvisi generici, promemoria senza data precisa. Non inventare mai date, ore o importi: se non sono scritti nella mail metti null. Se ci sono più date usa quella della scadenza o dell\'appuntamento, non quella di emissione. Oggi è ' + oggi + '.\n\n' +
-    'DA: ' + (msg.mittente || '') + '\nOGGETTO: ' + (msg.oggetto || '') + '\nTESTO:\n' + testo;
-}
-
-// Trasforma la risposta dell'IA in una proposta (o null se «niente» / risposta non valida).
-function leggiRispostaAI(txt, base) {
-  var j; try { j = JSON.parse(String(txt).replace(/^[^{]*/, '').replace(/[^}]*$/, '')); } catch (e) { return undefined; }
-  if (!j || !j.tipo) return undefined;
-  if (j.tipo === 'niente') return null;
-  var data = /^\d{4}-\d{2}-\d{2}$/.test(j.data || '') ? j.data : null;
-  var ora = /^\d{2}:\d{2}$/.test(j.ora || '') ? j.ora : null;
-  var cat = j.tipo === 'appuntamento' ? 'appuntamento' : (CATEGORIE_AI.indexOf(j.categoria) >= 0 ? j.categoria : 'altro');
-  if (j.tipo !== 'pagato' && !data) return null;
-  var imp = typeof j.importo === 'number' && j.importo > 0 ? j.importo : null;
-  var luogo = j.luogo ? 'Luogo: ' + String(j.luogo).slice(0, 80) + '. ' : '';
-  return { ext_id: base.ext + ':ai', sender: base.sender, subject: base.subject, kind: cat, title: String(j.titolo || base.subject).slice(0, 80) + ' · ' + base.sender,
-    due_date: data, time: ora, amount: imp, plate: j.targa ? String(j.targa).replace(/\s/g, '').toUpperCase().slice(0, 10) : null, ref: null, link: base.link,
-    paid_hint: j.tipo === 'pagato', note: (luogo + (j.motivo ? String(j.motivo).slice(0, 160) : '')).slice(0, 300) || null };
-}
-
-// Chiama il servizio scelto. Restituisce undefined se qualcosa non va (si usano allora le regole).
-function chiediAI(msg, testo, oggi) {
-  var p = promptAI(msg, testo.slice(0, 7000), oggi), res, out;
-  try {
-    if (AI_FORNITORE === 'claude') {
-      res = UrlFetchApp.fetch('https://api.anthropic.com/v1/messages', { method: 'post', contentType: 'application/json', muteHttpExceptions: true,
-        headers: { 'x-api-key': AI_CHIAVE, 'anthropic-version': '2023-06-01' },
-        payload: JSON.stringify({ model: 'claude-haiku-5-5', max_tokens: 500, messages: [{ role: 'user', content: p }] }) });
-      if (res.getResponseCode() >= 300) { Logger.log('IA: errore ' + res.getResponseCode() + ' ' + res.getContentText().slice(0, 200)); return undefined; }
-      out = (JSON.parse(res.getContentText()).content || []).map(function (c) { return c.text || ''; }).join('');
-    } else if (AI_FORNITORE === 'gemini') {
-      res = UrlFetchApp.fetch('https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent', { method: 'post', contentType: 'application/json', muteHttpExceptions: true,
-        headers: { 'x-goog-api-key': AI_CHIAVE },
-        payload: JSON.stringify({ contents: [{ parts: [{ text: p }] }], generationConfig: { responseMimeType: 'application/json', temperature: 0 } }) });
-      if (res.getResponseCode() >= 300) { Logger.log('IA: errore ' + res.getResponseCode() + ' ' + res.getContentText().slice(0, 200)); return undefined; }
-      var jr = JSON.parse(res.getContentText()); out = (((jr.candidates || [])[0] || {}).content || {}).parts; out = (out || []).map(function (x) { return x.text || ''; }).join('');
-    } else return undefined;
-  } catch (e) { Logger.log('IA: ' + e); return undefined; }
-  return out;
-}
-
-// Mail che vale la pena far leggere all'IA (le altre non escono da Google).
-function sembraUtile(msg, testo) {
-  if (NEGATIVI.test(msg.oggetto || '') && !APPUNT.test(msg.oggetto || '')) return false;
-  return TIPI.some(function (t) { return t[2].test((msg.oggetto || '') + ' ' + (msg.mittente || '')); }) || APPUNT.test(msg.oggetto || '') || (SCAD.test(testo) && trovaDate(testo).length > 0) || (APPUNT.test(testo.slice(0, 1500)) && ORA.test(testo));
-}
-
-/* ---------------------------------------------------------------
  * PARTE 2 – Gmail, Drive e invio all'app (solo in Apps Script)
  * ------------------------------------------------------------- */
 function testoDaPdf(blob) {
@@ -354,14 +289,6 @@ function raccogli(giorni, soloNuove) {
       var link = 'https://mail.google.com/mail/?authuser=' + encodeURIComponent(email) + '#all/' + th.getId();
       var msgObj = { id: id, mittente: m.getFrom(), oggetto: m.getSubject(), corpo: m.getPlainBody().slice(0, 20000), allegati: allegati, ics: ics, oggi: Utilities.formatDate(new Date(), 'Europe/Rome', 'yyyy-MM-dd'), link: link };
       var r = analizza(msgObj);
-      if (AI_FORNITORE && AI_CHIAVE) {
-        var testoIA = (msgObj.corpo || '') + '\n' + (msgObj.allegati || []).join('\n').slice(0, 4000);
-        if (sembraUtile(msgObj, testoIA)) {
-          var ris = chiediAI(msgObj, testoIA, msgObj.oggi);
-          var prop = ris === undefined ? undefined : leggiRispostaAI(ris, { ext: id, sender: nomeMittente(msgObj.mittente), subject: (msgObj.oggetto || '').slice(0, 250), link: link });
-          if (prop !== undefined) r = prop ? [prop] : [];   // l'IA decide; se non risponde restano le regole
-        }
-      }
       r.forEach(function (x) { righe.push(x); });
     });
   });
@@ -408,6 +335,26 @@ function provaUltimi60Giorni() {
   Logger.log('Mail guardate: ' + r.ids.length + ' · proposte: ' + r.righe.length + ' (niente inviato)');
 }
 
+// MAPPA DELLA POSTA: elenca chi ti scrive di più negli ultimi 90 giorni, con 2 oggetti di esempio
+// (NIENTE testo delle mail, solo mittente e oggetto). Serve a scrivere regole su misura per i tuoi mittenti.
+// Esegui, apri il log e incolla qui in chat l'elenco che vuoi condividere (puoi cancellare le righe private).
+function elencoMittenti() {
+  var per = {}, fine = 0, start = 0;
+  while (start < 600) {
+    var th = GmailApp.search('in:anywhere newer_than:90d -in:spam -in:trash', start, 100);
+    if (!th.length) break;
+    th.forEach(function (t) {
+      var m = t.getMessages()[0], f = m.getFrom(), mail = (/<([^>]+)>/.exec(f) || [0, f])[1].toLowerCase();
+      var dom = mail.split('@')[1] || mail;
+      var o = per[dom] || (per[dom] = { n: 0, ogg: [], promo: 0 });
+      o.n++; if (o.ogg.length < 2 && o.ogg.indexOf(m.getSubject()) < 0) o.ogg.push(m.getSubject());
+    });
+    start += 100;
+  }
+  var righe = Object.keys(per).sort(function (a, b) { return per[b].n - per[a].n; }).slice(0, 60).map(function (d) { return per[d].n + ' × ' + d + '  →  ' + per[d].ogg.join('  |  '); });
+  Logger.log(righe.join('\n'));
+}
+
 // Da lanciare UNA volta: crea il controllo automatico ogni 10 minuti.
 function installaControlloAutomatico() {
   ScriptApp.getProjectTriggers().forEach(function (t) { if (t.getHandlerFunction() === 'controllaPosta') ScriptApp.deleteTrigger(t); });
@@ -415,4 +362,4 @@ function installaControlloAutomatico() {
   Logger.log('Fatto: da ora la posta viene controllata ogni 10 minuti.');
 }
 
-if (typeof module !== 'undefined') module.exports = { leggiRispostaAI: leggiRispostaAI, promptAI: promptAI, sembraUtile: sembraUtile, analizza: analizza, leggiIcs: leggiIcs, trovaDate: trovaDate, trovaImporto: trovaImporto };
+if (typeof module !== 'undefined') module.exports = { analizza: analizza, leggiIcs: leggiIcs, trovaDate: trovaDate, trovaImporto: trovaImporto };

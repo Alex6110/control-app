@@ -838,11 +838,8 @@ function openQuick() {
         <label class="btn secondary" style="cursor:pointer">${ic('file')}Mostra la foto del foglio qui sotto<input id="quick-photo" type="file" accept="image/*" hidden></label>
         <div id="quick-photo-box" hidden><div class="pbox"><img id="quick-photo-img" alt="Foto del foglio"></div>
         <div class="zoom"><button type="button" data-action="photo-zoom" data-z="-1">Riduci</button><button type="button" data-action="photo-zoom" data-z="1">Ingrandisci</button></div></div>
-        <div id="quick-read" hidden>
-          <label>Cognome come sta sul foglio<input name="cognome" value="${esc(byId(people, state.famWho)?.details?.cognome || '')}" placeholder="es. Branca" autocapitalize="words"></label>
-          <button type="button" class="btn" data-action="quick-read" id="quick-read-btn">${ic('eye')}Leggi la riga dalla foto</button>
-          <p class="hint" id="quick-read-msg" style="margin-top:6px"></p>
-        </div>
+        <p class="hint" style="margin-top:6px">La foto resta sul tuo telefono: serve solo da guida mentre scrivi, non viene salvata né inviata.</p>
+      </div>
         <p class="hint" style="margin-top:6px">La foto non viene salvata. Se usi «Leggi la riga dalla foto» viene inviata una volta, per la lettura, al servizio di intelligenza artificiale che hai collegato; altrimenti resta sul telefono come guida.</p>
       </div>
       <label>Sigle, una per giorno, separate da uno spazio
@@ -852,50 +849,6 @@ function openQuick() {
     </form>`);
 }
 
-
-async function shrinkImage(file, max = 2000) {
-  const bmp = await createImageBitmap(file);
-  const k = Math.min(1, max / Math.max(bmp.width, bmp.height));
-  const c = document.createElement('canvas'); c.width = Math.round(bmp.width * k); c.height = Math.round(bmp.height * k);
-  c.getContext('2d').drawImage(bmp, 0, 0, c.width, c.height);
-  return { b64: c.toDataURL('image/jpeg', 0.86).split(',')[1], mime: 'image/jpeg' };
-}
-
-async function quickRead() {
-  const form = $('#quick-form'); const f = $('#quick-photo')?.files[0]; const msg = $('#quick-read-msg'); const btn = $('#quick-read-btn');
-  if (!form || !msg) return;
-  if (!f) { msg.textContent = 'Scegli prima la foto.'; return; }
-  const it = byId(state.items, form.elements.who.value); const cognome = form.elements.cognome.value.trim();
-  if (!it) return;
-  if (cognome.length < 2) { msg.textContent = 'Scrivi il cognome come compare sul foglio.'; return; }
-  const ym = curYM(); const [y, m] = ym.split('-').map(Number); const dim = new Date(y, m, 0).getDate();
-  btn.disabled = true; msg.textContent = 'Leggo la foto… può richiedere fino a 30 secondi.';
-  try {
-    const img = await shrinkImage(f);
-    const codici = shiftTypes(it, true).map((t) => t.short);
-    const { data, error } = await sb.functions.invoke('leggi-turni', { body: { image: img.b64, mime: img.mime, cognome, nome: '', mese: `${MONTHS_LONG[m - 1]} ${y}`, giorni: dim, codici } });
-    if (error || !data || data.errore) {
-      const st = error?.context?.status;
-      msg.textContent = st === 404 ? 'La funzione di lettura non è ancora installata su Supabase: segui la guida «leggi-turni».' : `Non sono riuscito a leggere la foto${data?.errore ? ': ' + data.errore : ''}. Puoi comunque scrivere le sigle a mano.`;
-      return;
-    }
-    if (!data.riga_trovata) { msg.textContent = `Non trovo la riga di «${cognome}» nella foto. Controlla il cognome o inquadra meglio la tabella.`; return; }
-    const sigle = (data.sigle || []).slice(0, dim);
-    form.elements.codes.value = sigle.join(' '); form.elements.start.value = 1;
-    const known = new Set(shiftTypes(it, true).map((t) => t.short.toLowerCase()));
-    const strani = [...new Set(sigle.filter((x) => x !== '-' && !known.has(String(x).toLowerCase())))];
-    const parts = [`Letti ${sigle.length} giorni${data.mese_letto ? ` · mese sul foglio: ${data.mese_letto}` : ''}.`];
-    if (data.mese_letto && !String(data.mese_letto).toLowerCase().includes(MONTHS_LONG[m - 1])) parts.push(`ATTENZIONE: il calendario aperto è ${MONTHS_LONG[m - 1]} ${y}.`);
-    if (sigle.length < dim) parts.push(`Mancano ${dim - sigle.length} giorni alla fine del mese.`);
-    if (data.dubbi?.length) parts.push(`Giorni incerti da controllare: ${data.dubbi.join(', ')}.`);
-    if (strani.length) parts.push(`Sigle non riconosciute: ${strani.join(', ')}.`);
-    parts.push('CONTROLLA sulla foto prima di compilare.');
-    if (data.nota) parts.push(data.nota);
-    msg.textContent = parts.join(' ');
-    if (cognome !== (it.details?.cognome || '')) store.update?.('items', it.id, { details: { ...(it.details || {}), cognome } }).then(() => { it.details = { ...(it.details || {}), cognome }; }).catch(() => {});
-  } catch (e) { msg.textContent = 'Errore nella lettura: ' + (e.message || e); }
-  finally { btn.disabled = false; }
-}
 
 async function onQuickSubmit(form) {
   const it = byId(state.items, form.elements.who.value); if (!it) return;
@@ -987,13 +940,26 @@ function inboxMatch(r) {
   return { item, sid };
 }
 
+// Esiste già nell'app qualcosa che corrisponde a questa proposta? (stessa mail, oppure stesso tipo e data vicina)
+function inboxDupe(r, m) {
+  if (r.link && state.deadlines.some((d) => d.link && d.link === r.link)) return 'Questa mail è già stata aggiunta';
+  if (!r.due_date) return '';
+  const near = (d) => d.due_date && Math.abs(diffDays(d.due_date, r.due_date)) <= 3;
+  if (r.kind === 'appuntamento') {
+    const d = state.deadlines.find((x) => x.kind === 'appuntamento' && x.due_date === r.due_date && (!r.time || !x.time || x.time === r.time));
+    return d ? `Esiste già «${d.title}» lo stesso giorno` : '';
+  }
+  const d = state.deadlines.find((x) => near(x) && (m.item ? x.item_id === m.item.id : true) && (x.section === r.kind || x.kind === r.kind));
+  return d ? `Sembra già presente: «${d.title}» del ${fmtDate(d.due_date)}${d.paid ? ' (già pagata)' : ''}` : '';
+}
 function inboxCard() {
   const list = state.inbox.filter((r) => r.status === 'new');
   if (!list.length) return '';
   const rows = list.slice(0, 5).map((r) => {
-    const m = inboxMatch(r);
+    const m = inboxMatch(r); const dupe = inboxDupe(r, m);
     const sub = [r.due_date ? fmtDate(r.due_date) + (r.time ? ' ore ' + r.time : '') : 'data da controllare', r.kind === 'appuntamento' ? '' : (r.amount != null ? money(r.amount) : 'importo non indicato')].filter(Boolean).join(' · ');
     return `<div class="inb">
+      ${dupe ? `<div class="inb-dupe">${ic('alert')}${esc(dupe)}</div>` : ''}
       <div class="inb-k">${r.kind === 'appuntamento' ? 'Appuntamento' : r.paid_hint ? 'Pagamento ricevuto' : 'Scadenza'}</div>
       <div class="inb-t">${esc(r.title || r.subject || 'Messaggio')}</div>
       <div class="inb-s">${esc(sub)}</div>
@@ -1003,7 +969,7 @@ function inboxCard() {
       <div class="inb-a">
         ${r.link ? `<a class="chip" href="${esc(safeUrl(r.link))}" target="_blank" rel="noopener noreferrer">Apri la mail</a>` : ''}
         ${readOnly() ? '' : `<button class="chip" data-action="inbox-skip" data-id="${r.id}">Scarta</button>
-        <button class="chip primary" data-action="${r.paid_hint ? 'inbox-paid' : 'inbox-add'}" data-id="${r.id}">${r.paid_hint ? 'Segna pagata' : 'Aggiungi'}</button>`}
+        <button class="chip primary" data-action="${r.paid_hint ? 'inbox-paid' : 'inbox-add'}" data-id="${r.id}">${r.paid_hint ? 'Segna pagata' : dupe ? 'Aggiungi comunque' : 'Aggiungi'}</button>`}
       </div>
     </div>`;
   }).join('');
@@ -2184,7 +2150,6 @@ document.addEventListener('click', async (e) => {
     case 'fam-pick': if (applyShift(el.dataset.item, el.dataset.day, el.dataset.type)) { render(); openFamilyDay(el.dataset.day); } break;
     case 'fam-clear': if (applyShift(el.dataset.item, el.dataset.day, null)) { render(); openFamilyDay(el.dataset.day); } break;
     case 'fam-quick': if (id) state.famWho = id; openQuick(); break;
-    case 'quick-read': quickRead(); break;
     case 'fam-addperson': openSheet('Aggiungi una persona', `<form id="fam-person-form" autocomplete="off"><label>Nome<input name="n" required maxlength="30" placeholder="es. Papà" list="fp-s"></label><datalist id="fp-s"><option value="Mamma"><option value="Papà"></datalist><div class="actions"><button class="btn" type="submit">Aggiungi</button></div></form>`); break;
     case 'photo-zoom': { const img = $('#quick-photo-img'); const w = parseInt(img.style.width || '260', 10); img.style.width = Math.max(100, Math.min(600, w + Number(el.dataset.z) * 80)) + '%'; break; }
     case 'fam-reparti': openReparti(el.dataset.mon); break;
@@ -2345,11 +2310,10 @@ document.addEventListener('input', onSecFormInput);
 document.addEventListener('change', (e) => {
   onDeadlineFormChange(e);
   onSecFormInput(e);
-  if (e.target.name === 'who' && e.target.closest('#quick-form')) { const c = e.target.closest('#quick-form').elements.cognome; if (c) c.value = byId(state.items, e.target.value)?.details?.cognome || ''; }
   if (e.target.id === 'import-file' && e.target.files[0]) importJSON(e.target.files[0]);
   if (e.target.id === 'quick-photo' && e.target.files[0]) {
     const img = $('#quick-photo-img'); if (img.dataset.url) URL.revokeObjectURL(img.dataset.url);
-    img.dataset.url = URL.createObjectURL(e.target.files[0]); img.src = img.dataset.url; img.style.width = '260%'; $('#quick-photo-box').hidden = false; $('#quick-read').hidden = MODE !== 'cloud';
+    img.dataset.url = URL.createObjectURL(e.target.files[0]); img.src = img.dataset.url; img.style.width = '260%'; $('#quick-photo-box').hidden = false;
   }
 });
 

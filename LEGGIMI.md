@@ -102,6 +102,11 @@ Se cambi icona o aggiorni l'app e il telefono mostra ancora la vecchia, elimina 
 
 ## v8
 - Da rilanciare in Supabase (SQL Editor): `supabase-schema.sql` (il blocco v7 aggiunge l'orario agli appuntamenti).
-- «Compila dal foglio» è anche nella pagina di ogni persona; «Leggi la riga dalla foto» richiede la funzione `leggi-turni` (vedi `supabase/functions/leggi-turni/LEGGIMI.md`).
-- Posta: appuntamenti con ora e luogo, meno falsi positivi, lettura IA facoltativa (vedi `gmail/LEGGIMI-GMAIL.md`).
+- «Compila dal foglio» è anche nella pagina di ogni persona.
+- Posta: appuntamenti con ora e luogo, meno falsi positivi.
 - PC: ogni voce è una scheda; spaziatura sotto «Aggiungi».
+
+## v9
+- Tolta ogni intelligenza artificiale (script, app, funzione Supabase): tutto gira con regole dentro il tuo account Google.
+- «Da confermare» avvisa se la proposta sembra già presente nell'app («Sembra già presente…», «Aggiungi comunque»).
+- Script: `elencoMittenti` (mappa di chi ti scrive, solo mittente e oggetto).

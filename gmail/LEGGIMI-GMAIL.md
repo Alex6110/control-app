@@ -49,4 +49,4 @@ Ripeti dal punto 1 per l'altra Gmail, con la **stessa chiave**.
 - **Appuntamenti:** lo script riconosce visite, prelievi, assemblee, riunioni e gli inviti di calendario (.ics), con **data, ora e luogo**. Compaiono in «Da confermare» come «Appuntamento» e, una volta aggiunti, in Home → «Prossimi appuntamenti».
 - **Meno errori:** preventivi, codici di accesso, newsletter e mail senza oggetto non diventano più scadenze. Ogni proposta dice «Dalla mail …» e perché ha letto quella data.
 - **Prima scansione:** `provaUltimi60Giorni` (vedi cosa trova, senza inviare) e poi `primaScansione` (invia; rilancia finché dice «finito»).
-- **Lettura con intelligenza artificiale (facoltativa):** in cima allo script metti `AI_FORNITORE = 'claude'` (o `'gemini'`) e la chiave in `AI_CHIAVE`. Solo le mail che sembrano contenere scadenze o appuntamenti vengono inviate, come testo, al servizio scelto. Se l'IA non risponde, restano le regole. Lasciando `''` nulla esce da Google.
+- **Nessuna IA, nessun dato fuori da Google:** tutto è letto da regole dentro il tuo account. `elencoMittenti` mostra chi ti scrive di più, per fare regole su misura.
