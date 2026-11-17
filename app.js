@@ -834,13 +834,12 @@ function openQuick() {
     <form id="quick-form" autocomplete="off">
       <label>Di chi è la riga?<select name="who">${people.map((p) => `<option value="${p.id}" ${p.id === state.famWho ? 'selected' : ''}>${esc(firstName(p))}</option>`).join('')}</select></label>
       <label>Da che giorno parti? (${MONTHS_LONG[m - 1]} ${y})<input name="start" type="number" min="1" max="31" value="1" inputmode="numeric"></label>
+      <button type="button" class="btn" data-action="quick-scan">${ic('file')}Leggi la riga dalla foto</button>
+      <p class="hint" style="margin-top:6px">Tocca i 4 angoli della tabella e la riga della persona: le sigle le leggo io, direttamente nel telefono. La foto non viene salvata né inviata. Poi controlli e correggi.</p>
       <div class="photo-ref">
-        <label class="btn secondary" style="cursor:pointer">${ic('file')}Mostra la foto del foglio qui sotto<input id="quick-photo" type="file" accept="image/*" hidden></label>
+        <label class="btn secondary" style="cursor:pointer">${ic('file')}Oppure mostra la foto qui sotto, come guida<input id="quick-photo" type="file" accept="image/*" hidden></label>
         <div id="quick-photo-box" hidden><div class="pbox"><img id="quick-photo-img" alt="Foto del foglio"></div>
         <div class="zoom"><button type="button" data-action="photo-zoom" data-z="-1">Riduci</button><button type="button" data-action="photo-zoom" data-z="1">Ingrandisci</button></div></div>
-        <p class="hint" style="margin-top:6px">La foto resta sul tuo telefono: serve solo da guida mentre scrivi, non viene salvata né inviata.</p>
-      </div>
-        <p class="hint" style="margin-top:6px">La foto non viene salvata. Se usi «Leggi la riga dalla foto» viene inviata una volta, per la lettura, al servizio di intelligenza artificiale che hai collegato; altrimenti resta sul telefono come guida.</p>
       </div>
       <label>Sigle, una per giorno, separate da uno spazio
         <textarea class="quick-box" name="codes" spellcheck="false" autocapitalize="characters" placeholder="1C 1C 1C 1C A A A 1 2 3 S R"></textarea></label>
@@ -2129,7 +2128,7 @@ async function onJoinHousehold(form) {
 }
 
 /* ---------- eventi ---------- */
-const WRITE_ACTIONS = new Set(['fam-day', 'fam-quick', 'fam-addperson', 'fam-reparti', 'fam-pick', 'fam-clear', 'fam-who', 'shift-day', 'shift-paint', 'shift-pick', 'shift-clear', 'shift-types', 'shift-cycle', 'new-shift-type', 'edit-shift-type', 'new-history', 'delete-history', 'new-deadline', 'new-item', 'new-log', 'edit-item', 'delete-item', 'hide-section', 'unhide-section', 'delete-deadline', 'delete-log', 'pay-form', 'reopen-form', 'inbox-add', 'inbox-paid', 'inbox-skip']);
+const WRITE_ACTIONS = new Set(['fam-day', 'fam-quick', 'quick-scan', 'fam-addperson', 'fam-reparti', 'fam-pick', 'fam-clear', 'fam-who', 'shift-day', 'shift-paint', 'shift-pick', 'shift-clear', 'shift-types', 'shift-cycle', 'new-shift-type', 'edit-shift-type', 'new-history', 'delete-history', 'new-deadline', 'new-item', 'new-log', 'edit-item', 'delete-item', 'hide-section', 'unhide-section', 'delete-deadline', 'delete-log', 'pay-form', 'reopen-form', 'inbox-add', 'inbox-paid', 'inbox-skip']);
 document.addEventListener('click', async (e) => {
   const el = e.target.closest('[data-action]');
   if (!el) return;
@@ -2151,6 +2150,14 @@ document.addEventListener('click', async (e) => {
     case 'fam-clear': if (applyShift(el.dataset.item, el.dataset.day, null)) { render(); openFamilyDay(el.dataset.day); } break;
     case 'fam-quick': if (id) state.famWho = id; openQuick(); break;
     case 'fam-addperson': openSheet('Aggiungi una persona', `<form id="fam-person-form" autocomplete="off"><label>Nome<input name="n" required maxlength="30" placeholder="es. Papà" list="fp-s"></label><datalist id="fp-s"><option value="Mamma"><option value="Papà"></datalist><div class="actions"><button class="btn" type="submit">Aggiungi</button></div></form>`); break;
+    case 'quick-scan': {
+      const [qy, qm] = curYM().split('-').map(Number); const dim = new Date(qy, qm, 0).getDate();
+      if (!window.Scan) { toast('Lettore non disponibile, ricarica la pagina.'); break; }
+      window.Scan.open({ n: dim, onDone: (codes) => {
+        const f = $('#quick-form'); if (!f) return;
+        f.elements.codes.value = codes.map((c) => (c === '-' ? '-' : c)).join(' '); f.elements.start.value = 1;
+        toast('Sigle inserite: controllale e premi «Compila il calendario».');
+      } }); break; }
     case 'photo-zoom': { const img = $('#quick-photo-img'); const w = parseInt(img.style.width || '260', 10); img.style.width = Math.max(100, Math.min(600, w + Number(el.dataset.z) * 80)) + '%'; break; }
     case 'fam-reparti': openReparti(el.dataset.mon); break;
     case 'fam-print': printFamily(); break;

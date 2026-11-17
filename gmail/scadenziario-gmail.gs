@@ -41,17 +41,28 @@ var TIPI = [ // [id, etichetta, regex]  (l'ordine conta: il primo che trova vinc
   ['acqua', 'Bolletta acqua', /servizio idrico|\bacqua\b|\bacquedotto\b|\biren\b|\bacea\b|\bhera\b.*acqua/i],
   ['internet', 'Internet', /fibra|internet|\badsl\b|\bwi-?fi\b|\btim\b|\bvodafone\b|\bfastweb\b|\bwind\s?tre\b|\biliad\b|\bsky\s?wifi\b/i],
   ['condominio', 'Condominio', /condomini|amministratore di condominio/i],
-  ['documento', 'Documento in scadenza', /\bspid\b|posteid|carta d.identit|passaporto|\bpatente\b|tessera sanitaria|firma digitale|certificato digitale/i],
+  ['documento', 'Documento in scadenza', /\bspid\b|\bcie(?:id)?\b|posteid|carta d.identit|passaporto|\bpatente\b|tessera sanitaria|firma digitale|certificato digitale/i],
   ['abbonamento', 'Abbonamento', /abbonamento|rinnovo (?:automatico|dell)|canone/i],
+  ['altro', 'Pagamento pagoPA', /pagopa/i],
 ];
 // Mail da NON proporre mai come scadenza (preventivi, codici, accessi, sondaggi…)
-var NEGATIVI = /preventiv|quotazione|codice (?:di )?(?:verifica|accesso|sicurezza)|\botp\b|nuovo accesso|accesso eseguito|reimposta (?:la )?password|conferma (?:la tua )?(?:registrazione|iscrizione)|benvenut[oa]|sondaggio|questionario|ti piace|valuta (?:il|la|l')|recensione/i;
+var NEGATIVI = /cambio password|notifica cambio|revoca otp|notifiche? di accesso|avviso di accesso|verifica identit[àa] digitale|certificato di malattia|avviso di sicurezza|informativa|aggiornamento (?:ai|alla|dei|alle) |termini (?:e condizioni|di servizio)|tracking pixel|preventiv|quotazione|codice (?:di )?(?:verifica|accesso|sicurezza)|\botp\b|nuovo accesso|accesso eseguito|reimposta (?:la )?password|conferma (?:la tua )?(?:registrazione|iscrizione)|benvenut[oa]|sondaggio|questionario|ti piace|valuta (?:il|la|l')|recensione/i;
 var AUTOLETTURA = /autolettura/i;
 // Appuntamenti
 var APPUNT = /appuntament|prenotazion|prenotat[oa]|visita (?:medica|specialistica|di controllo|ambulatoriale|oculistica|cardiologica)|\bvisita\b|\bprelievo\b|ecografia|\besame\b|vaccin|colloquio|\briunione\b|assemblea|convocazione|sopralluogo|intervento (?:tecnico|programmato)|ritiro (?:referto|documenti)|\bseduta\b/i;
 var ORA = /(?:\bore\b|\balle\b|\bh\b|dalle)\s*(\d{1,2})(?:[:.h](\d{2}))?|\b([01]?\d|2[0-3]):([0-5]\d)\b/i;
 var LUOGO = /(?:presso|luogo|sede|ambulatorio|ospedale|studio|indirizzo)\s*[:\-]?\s*([A-ZÀ-Ý0-9][^\n.;]{3,70})|\b((?:in |a )?(?:via|viale|piazza|corso|largo|lungomare)\s+[A-ZÀ-Ýa-zà-ý' ]{2,40}\s*,?\s*\d{0,4}[^\n.;]{0,20})/i;
-var RICEVUTA = /quietanza|ricevuta di pagamento|pagamento (?:\S+ )?(?:ricevuto|effettuato|completato|andato a buon fine)|abbiamo ricevuto (?:il |l')?(?:suo )?pagamento|grazie per (?:aver pagato|il pagamento)/i;
+var RICEVUTA = /riepilogo del tuo pagamento|ricevuta (?:telematica|pagopa)|conferma di avvenuto pagamento|quietanza|ricevuta di pagamento|pagamento (?:\S+ )?(?:ricevuto|effettuato|completato|andato a buon fine)|abbiamo ricevuto (?:il |l')?(?:suo )?pagamento|grazie per (?:aver pagato|il pagamento)/i;
+// Mittenti che mandano solo pubblicità, newsletter, corsi, avvisi di sicurezza o notifiche: non diventano mai scadenze.
+// (Lista fatta sull'elenco reale dei mittenti di Giovanni e Patrizia. Aggiungine altri quando serve.)
+var DOMINI_IGNORATI = /(?:^|\.)(?:accounts\.google\.com|google\.com|openai\.com|supabase\.io|dropbox\.com|subito\.it|mymercato\.it|fastfooddiet\.it|insideapple\.apple\.com|modadistrict\.com|triumph\.com|yesalps\.com|ticketone\.it|change\.org|fpcgil\.it|trenitalia\.it|mooneygo\.it|mycicero\.it|dimar\.it)$/i;
+// Mittenti che mandano soprattutto pubblicità, ma ogni tanto anche cose che contano (rinnovi, costi, scadenze di SPID/CIE…):
+// le loro mail si leggono davvero e diventano proposta SOLO se il testo parla di una scadenza/rinnovo/addebito con una data.
+var DOMINI_RUMOROSI = /(?:^|\.)(?:amazon\.(?:it|com)|amazonmusic\.com|dazn\.com|segugio\.it|telepass\.com|services\.telepass\.it|unipol\.it|paypal\.(?:com|it)|namirial\.com|namirialnotify\.com|cartaidentita\.it|inps\.it|messaggi\.intesasanpaolo\.com|comunicazioni\.poste\.it|mail\.eon\.it|metisformazionericerca\.it|fpformazione\.it|fadecm\.net|biomedia\.net|vits\.it|italianmr\.com|tsrm\.org|tsrmpstrpgeimsv\.org|ecmclub\.org|euromediform\.it|eduiss\.it|infocongressi\.com|corsiecm\.info)$/i;
+// Segnali di una cosa PERSONALE (non pubblicità): rinnovo/addebito/scadenza di qualcosa che hai
+var SEGNALE_FORTE = /(?:si rinnov|verr[àa] rinnovat|rinnovo (?:automatico|dell|del)|ti verr[àa] addebitat|addebito (?:di|sul|della)|sar[àa] addebitat|scade (?:il|tra|a breve)|scadr[àa] (?:il|tra)|in scadenza (?:il|tra)|valida? fino al|data di scadenza|la tua (?:carta|identit|spid|cie|polizza|rc|assicurazione)[^.\n]{0,40}scad)/i;
+function dominioDi(from) { var m = /@([^>\s"]+)/.exec(String(from || '')); return m ? m[1].toLowerCase() : ''; }
+
 var PROMO = /disiscriv|annulla (?:la )?(?:tua )?iscrizione|unsubscribe|newsletter|\bsconti?\b|\boffert[ae]\b|\bpromo(?:zione)?\b|\bsaldi\b|black friday|\bcoupon\b|risparmia/i;
 var SCAD = /scadenz|da pagare entro|entro il|pagabile entro|data limite|termine di pagamento/i;
 
@@ -179,10 +190,13 @@ function nomeMittente(from) {
 function analizza(msg) {
   var allegati = (msg.allegati || []).join('\n');
   var t = ((msg.oggetto || '') + '\n' + (msg.corpo || '') + '\n' + allegati).replace(/[ \t\u00a0]+/g, ' ');
+  var dom = dominioDi(msg.mittente);
+  if (DOMINI_IGNORATI.test(dom)) return [];
   var oggetto = msg.oggetto || '';
   var sintetico = !oggetto.trim();
   if (sintetico) { oggetto = ((msg.corpo || '').split('\n').filter(function (r) { return r.trim(); })[0] || '').slice(0, 120); msg = Object.assign({}, msg, { oggetto: oggetto }); }
   if (NEGATIVI.test(oggetto)) return [];
+  if (DOMINI_RUMOROSI.test(dom) && !(SEGNALE_FORTE.test(oggetto + ' ' + t) && trovaDate(t).length)) return [];
   var base0 = { sender: nomeMittente(msg.mittente), subject: oggetto.slice(0, 250), link: msg.link || '', ext: msg.id };
   var dateT = trovaDate(t);
   // appuntamenti (anche dagli inviti di calendario)
@@ -250,6 +264,14 @@ function analizza(msg) {
 /* ---------------------------------------------------------------
  * PARTE 2 – Gmail, Drive e invio all'app (solo in Apps Script)
  * ------------------------------------------------------------- */
+// Legge il testo di un allegato: PDF, foto/scansioni (con riconoscimento del testo), Word, OpenDocument, RTF, testo, HTML.
+function leggibile(a) {
+  var tipo = String(a.getContentType() || '').toLowerCase(), nome = String(a.getName() || '').toLowerCase();
+  if (/pdf/.test(tipo) || /\.pdf$/.test(nome)) return 'pdf';
+  if (/^image\/(jpeg|png|gif|bmp)/.test(tipo) || /\.(jpe?g|png|gif|bmp)$/.test(nome)) return a.getSize() > 25000 ? 'img' : '';   // niente loghi e firme
+  if (/wordprocessing|msword|opendocument\.text|rtf|text\/plain|text\/html/.test(tipo) || /\.(docx?|odt|rtf|txt|html?)$/.test(nome)) return 'doc';
+  return '';
+}
 function testoDaPdf(blob) {
   if (blob.getBytes().length > MAX_PDF_BYTES) return '';
   var id = null;
@@ -283,7 +305,7 @@ function raccogli(giorni, soloNuove) {
       n++; idsNuovi.push(id);
       var allegati = [], ics = '';
       m.getAttachments({ includeInlineImages: false }).forEach(function (a) {
-        if (/pdf/i.test(a.getContentType())) allegati.push(testoDaPdf(a.copyBlob()));
+        if (leggibile(a) && allegati.length < 4) allegati.push(testoDaPdf(a.copyBlob()));
         else if (/calendar|\.ics$/i.test(a.getContentType() + ' ' + a.getName())) { try { ics += a.getDataAsString(); } catch (e) {} }
       });
       var link = 'https://mail.google.com/mail/?authuser=' + encodeURIComponent(email) + '#all/' + th.getId();
@@ -362,4 +384,4 @@ function installaControlloAutomatico() {
   Logger.log('Fatto: da ora la posta viene controllata ogni 10 minuti.');
 }
 
-if (typeof module !== 'undefined') module.exports = { analizza: analizza, leggiIcs: leggiIcs, trovaDate: trovaDate, trovaImporto: trovaImporto };
+if (typeof module !== 'undefined') module.exports = { dominioDi: dominioDi, analizza: analizza, leggiIcs: leggiIcs, trovaDate: trovaDate, trovaImporto: trovaImporto };

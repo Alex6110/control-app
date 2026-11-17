@@ -110,3 +110,13 @@ Se cambi icona o aggiorni l'app e il telefono mostra ancora la vecchia, elimina 
 - Tolta ogni intelligenza artificiale (script, app, funzione Supabase): tutto gira con regole dentro il tuo account Google.
 - «Da confermare» avvisa se la proposta sembra già presente nell'app («Sembra già presente…», «Aggiungi comunque»).
 - Script: `elencoMittenti` (mappa di chi ti scrive, solo mittente e oggetto).
+
+## Novità v10 — lettura dei turni dalla foto (nel telefono)
+In **Turni → Compila dal foglio → «Leggi la riga dalla foto»**:
+1. scegli la foto del prospetto mensile (tutta la tabella dentro, ben illuminata);
+2. tocca i 4 angoli della tabella (alto-sinistra, alto-destra, basso-destra, basso-sinistra), poi li ripeti più precisi;
+3. scorri i nomi e tocca la riga della persona;
+4. controlla le sigle: le caselle incerte sono **gialle**, accanto all'immagine della casella; correggi dal menu;
+5. «Usa queste sigle» e poi «Compila il calendario».
+Tutto avviene sul telefono: nessuna foto parte, nessun servizio esterno, gratis.
+Il lettore riconosce: 1, 1C, 1CR, 1B, 1D, 2, 2A, 2*, 3, S, R, A, F, P e il vuoto. Le sigle che nel tuo calendario non esistono vengono segnalate e saltate.

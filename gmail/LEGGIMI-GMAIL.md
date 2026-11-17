@@ -50,3 +50,6 @@ Ripeti dal punto 1 per l'altra Gmail, con la **stessa chiave**.
 - **Meno errori:** preventivi, codici di accesso, newsletter e mail senza oggetto non diventano più scadenze. Ogni proposta dice «Dalla mail …» e perché ha letto quella data.
 - **Prima scansione:** `provaUltimi60Giorni` (vedi cosa trova, senza inviare) e poi `primaScansione` (invia; rilancia finché dice «finito»).
 - **Nessuna IA, nessun dato fuori da Google:** tutto è letto da regole dentro il tuo account. `elencoMittenti` mostra chi ti scrive di più, per fare regole su misura.
+
+## Regole sui mittenti veri (v9.1)
+Lista di mittenti sempre ignorati (pubblicità, corsi ECM, newsletter, avvisi di sicurezza, SPID, PayPal…) in `DOMINI_IGNORATI`, in cima allo script. Per aggiungerne uno, inserisci il dominio nell'elenco.

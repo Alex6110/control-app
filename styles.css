@@ -583,3 +583,23 @@ a.chip { text-decoration: none; display: inline-flex; align-items: center; }
 
 .inb-dupe { display: flex; align-items: center; gap: 6px; font-size: 13px; font-weight: 650; color: #b45309; background: color-mix(in srgb, #f59e0b 16%, transparent); border-radius: 10px; padding: 6px 10px; margin-bottom: 6px; }
 .inb-dupe svg { width: 16px; height: 16px; flex: none; }
+
+/* ---- lettore foto turni ---- */
+.scan{position:fixed;inset:0;z-index:9999;background:var(--bg,#fff);overflow:auto;-webkit-overflow-scrolling:touch}
+.scan-head{display:flex;gap:12px;align-items:flex-start;padding:14px 16px;position:sticky;top:0;background:var(--bg,#fff);border-bottom:1px solid rgba(128,128,128,.25);z-index:2}
+.scan-head h2{margin:0 0 4px;font-size:1.15rem}.scan-head p{margin:0;font-size:.92rem;line-height:1.35}
+.scan-x{border:0;background:rgba(128,128,128,.18);border-radius:50%;width:36px;height:36px;font-size:1rem;flex:none;color:inherit}
+.scan-body{padding:14px 16px 90px;max-width:900px;margin:0 auto}
+.scan-btn{display:inline-block;border:1px solid rgba(128,128,128,.45);background:transparent;color:inherit;border-radius:12px;padding:12px 16px;font-size:1rem;margin:8px 8px 0 0;cursor:pointer}
+.scan-btn.pri{background:#0a84ff;border-color:#0a84ff;color:#fff}.scan-btn.big{display:block;text-align:center;padding:18px;font-size:1.1rem}
+.scan-btn[disabled]{opacity:.4}
+.scan-hint{font-size:.9rem;opacity:.75;line-height:1.4}
+.scan-cv{width:100%;height:auto;display:block;border-radius:8px;touch-action:manipulation}
+.scan-names{max-height:60vh;overflow:auto;border:1px solid rgba(128,128,128,.3);border-radius:8px}
+.scan-bar{position:fixed;left:0;right:0;bottom:0;padding:10px 16px;background:var(--bg,#fff);border-top:1px solid rgba(128,128,128,.25);display:flex;gap:8px;justify-content:center}
+.scan-bar .scan-btn{margin:0}
+.scan-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(112px,1fr));gap:8px}
+.scan-cell{border:1px solid rgba(128,128,128,.3);border-radius:10px;padding:6px;display:flex;flex-direction:column;gap:4px;align-items:stretch}
+.scan-cell.doubt{background:rgba(255,212,0,.28);border-color:#e0b400}
+.scan-cell .d{font-size:.75rem;opacity:.7}.scan-th{width:100%;height:auto;border-radius:4px;background:#fff}
+.scan-cell select{font-size:1.05rem;font-weight:600;padding:6px;border-radius:8px}
