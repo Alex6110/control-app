@@ -53,3 +53,6 @@ Ripeti dal punto 1 per l'altra Gmail, con la **stessa chiave**.
 
 ## Regole sui mittenti veri (v9.1)
 Lista di mittenti sempre ignorati (pubblicità, corsi ECM, newsletter, avvisi di sicurezza, SPID, PayPal…) in `DOMINI_IGNORATI`, in cima allo script. Per aggiungerne uno, inserisci il dominio nell'elenco.
+
+## Correzione allegati PDF (v9.2)
+Il messaggio «PDF non leggibile … DocumentApp.openById» è risolto: il testo si scarica ora direttamente dall'API di Drive, senza il servizio Documenti. Sostituisci `Codice.gs` con la nuova versione; alla prima esecuzione Google può chiedere di nuovo il permesso.

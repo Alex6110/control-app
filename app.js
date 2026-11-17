@@ -754,7 +754,7 @@ function pageFamily() {
   const who = byId(people, state.famWho);
   const maps = Object.fromEntries(people.map((p) => [p.id, shiftMap(p.id)]));
   const cells = monthCells(ym).map((c) => {
-    const pills = people.map((p) => { const r = maps[p.id][c.iso]; if (!r) return `<span class="fam-pill none"></span>`; const t = shiftOf(p, r.kind); return `<span class="fam-pill sh-c${famColor(p)}">${esc(t.short)}</span>`; }).join('');
+    const pills = people.map((p) => { const r = maps[p.id][c.iso]; if (!r) return `<span class="fam-pill none"></span>`; const t = shiftOf(p, r.kind); const rp = repDay(p, c.iso); return `<span class="fam-pill sh-c${famColor(p)}">${esc(t.short)}${rp ? `<i class="fam-rp">${esc(rp.slice(0, 5))}</i>` : ''}</span>`; }).join('');
     return `<button class="fam-cell ${c.inMonth ? '' : 'out'} ${c.iso === today ? 'today' : ''}" data-action="fam-day" data-day="${c.iso}"><span class="d">${c.n}</span>${pills}</button>`;
   }).join('');
   const whoChips = people.map((p) => `<button class="sh-chip sh-c${famColor(p)} ${p.id === who.id ? 'sel' : ''}" data-action="fam-who" data-id="${p.id}"><b>${esc(firstName(p).slice(0, 1).toUpperCase())}</b>${esc(firstName(p))}</button>`).join('');
@@ -791,6 +791,8 @@ function pageFamily() {
 /* --- reparto della settimana (cambia ogni settimana) --- */
 const mondayOf = (iso) => { const d = fromISO(iso); return toISO(new Date(d.getFullYear(), d.getMonth(), d.getDate() - ((d.getDay() + 6) % 7), 12)); };
 const repartoOf = (it, mon) => (it.details?.reparti || {})[mon] || '';
+const repDay = (it, iso) => (it.details?.repartiDay || {})[iso] || repartoOf(it, mondayOf(iso));
+const allReparti = () => [...new Set([...famPeople().flatMap((p) => [...Object.values(p.details?.reparti || {}), ...Object.values(p.details?.repartiDay || {})]).filter(Boolean), 'Smistamento', 'Urgenze', 'Biologia mol.', 'Chimica', 'Coagulazione', 'Ematologia', 'Elettroforesi', 'Microbiologia', 'Sierologia'])];
 const shortRange = (mon) => { const a = fromISO(mon), b = new Date(a.getFullYear(), a.getMonth(), a.getDate() + 6, 12); return `${a.getDate()}${a.getMonth() !== b.getMonth() ? ' ' + MONTHS_LONG[a.getMonth()].slice(0, 3) : ''}–${b.getDate()} ${MONTHS_LONG[b.getMonth()].slice(0, 3)}`; };
 const weeksOfMonth = (ym) => { const out = []; monthCells(ym).forEach((c, i) => { if (i % 7 === 0) out.push(c.iso); }); return out; };
 
@@ -800,7 +802,11 @@ function repartiBlock(people) {
       <div class="main"><div class="t">${shortRange(mon)}</div>
         <div class="s">${people.map((p) => { const r = repartoOf(p, mon); return `<span class="rep-pill ${r ? 'sh-c' + famColor(p) : 'empty'}"><b>${esc(firstName(p).slice(0, 1))}</b> ${r ? esc(r) : 'reparto?'}</span>`; }).join('')}</div></div>
       <span class="chev">${ic('next')}</span></button>`).join('');
-  return `<div class="group-title">Reparto di ogni settimana</div><div class="list rep-list">${rows}</div>`;
+  const who = byId(people, state.famWho) || people[0];
+  return `<div class="group-title">Reparto</div>
+    ${readOnly() || !who ? '' : `<div class="actions"><button class="btn" data-action="week-scan">${ic('file')}Leggi i reparti di ${esc(firstName(who))} dalla foto settimanale</button></div>
+    <p class="hint">Ogni giorno può avere un reparto diverso: tocca un giorno del calendario per cambiarlo, oppure fotografa il «Quadro turni settimanali».</p>`}
+    <div class="group-title">Reparto fisso di una settimana</div><div class="list rep-list">${rows}</div>`;
 }
 
 function openReparti(mon) {
@@ -855,17 +861,28 @@ async function onQuickSubmit(form) {
   const ym = curYM(); const [y, m] = ym.split('-').map(Number); const dim = new Date(y, m, 0).getDate();
   const toks = form.elements.codes.value.trim().split(/[\s,;|]+/).filter(Boolean);
   if (!toks.length) { toast('Scrivi almeno una sigla.'); return; }
-  const types = shiftTypes(it, true); const entries = []; const unknown = new Set(); const over = Math.max(0, start - 1 + toks.length - dim);
+  let types = shiftTypes(it, true); const entries = []; const unknown = new Map(); const over = Math.max(0, start - 1 + toks.length - dim);
+  // le sigle che non conosciamo diventano nuovi tipi («Sigla X»): le sapete voi, il nome si cambia poi da «Tipi»
+  toks.forEach((tk) => {
+    if (/^[-–._]+$/.test(tk) || tk === '?' || types.find((x) => x.short.toLowerCase() === tk.toLowerCase()) || unknown.has(tk.toUpperCase())) return;
+    unknown.set(tk.toUpperCase(), { id: 'c_' + tk.toLowerCase().replace(/[^a-z0-9]/g, '') + Date.now().toString(36).slice(-3), label: 'Sigla ' + tk.toUpperCase(), short: tk.toUpperCase().slice(0, 3), color: 9, from: '', to: '' });
+  });
+  let cur = it;
+  if (unknown.size) {
+    const saved = await saveItem(it.id, { details: { ...(it.details || {}), shiftTypes: [...(it.details?.shiftTypes || []), ...unknown.values()] } });
+    if (!saved) return; cur = saved; types = shiftTypes(cur, true);
+  }
+  const skipped = [];
   toks.forEach((tk, i) => {
     const day = start + i; if (day > dim) return;
     if (/^[-–._]+$/.test(tk)) return;
     const t = types.find((x) => x.short.toLowerCase() === tk.toLowerCase());
-    if (!t) { unknown.add(tk); return; }
+    if (!t) { skipped.push(tk); return; }
     entries.push({ day: `${ym}-${String(day).padStart(2, '0')}`, kind: t.id });
   });
   if (entries.length && !applyShiftsBulk(it.id, entries)) return;
   state.famWho = it.id; closeSheetNow(); render();
-  toast(`${entries.length} giorni compilati` + (unknown.size ? ` · sigle non riconosciute: ${[...unknown].join(', ')}` : '') + (over ? ` · ${over} in più oltre fine mese` : ''));
+  toast(`${entries.length} giorni compilati` + (unknown.size ? ` · ${unknown.size} sigle nuove aggiunte (${[...unknown.keys()].join(', ')}): dai loro un nome da «Tipi»` : '') + (skipped.length ? ` · non inserite: ${skipped.join(', ')}` : '') + (over ? ` · ${over} in più oltre fine mese` : ''));
 }
 
 function openFamilyDay(iso) {
@@ -874,9 +891,10 @@ function openFamilyDay(iso) {
     const row = state.shifts.find((x) => x.item_id === p.id && x.day === iso);
     return `<div class="group-title">${esc(firstName(p))}</div>
       <div class="sh-palette">${shiftTypes(p).map((t) => `<button class="sh-chip sh-c${t.color} ${row?.kind === t.id ? 'sel' : ''}" data-action="fam-pick" data-item="${p.id}" data-day="${iso}" data-type="${t.id}"><b>${esc(t.short)}</b>${esc(t.label)}${shiftHours(t) ? ` ${shiftHours(t)}` : ''}</button>`).join('')}
-      ${row ? `<button class="sh-chip erase" data-action="fam-clear" data-item="${p.id}" data-day="${iso}">${ic('trash')}Svuota</button>` : ''}</div>`;
+      ${row ? `<button class="sh-chip erase" data-action="fam-clear" data-item="${p.id}" data-day="${iso}">${ic('trash')}Svuota</button>` : ''}</div>
+      <div class="rep-day"><input id="repd-${p.id}" list="rep-sugg" maxlength="40" value="${esc(repDay(p, iso))}" placeholder="Reparto di questo giorno"><button class="sh-chip" data-action="fam-rep-set" data-item="${p.id}" data-day="${iso}">Salva reparto</button></div>`;
   }).join('');
-  openSheet(`${DAYS_LONG[d.getDay()]} ${d.getDate()} ${MONTHS_LONG[d.getMonth()]}`, blocks + `<p class="hint">Le modifiche si salvano subito. Tocca fuori per chiudere.</p>`, { noAnim: !!sheetOpen });
+  openSheet(`${DAYS_LONG[d.getDay()]} ${d.getDate()} ${MONTHS_LONG[d.getMonth()]}`, blocks + `<datalist id="rep-sugg">${allReparti().map((x) => `<option value="${esc(x)}">`).join('')}</datalist><p class="hint">I turni si salvano subito. Il reparto si salva con «Salva reparto». Tocca fuori per chiudere.</p>`, { noAnim: !!sheetOpen });
 }
 
 function printFamily() {
@@ -889,7 +907,8 @@ function printFamily() {
     rows.push(`<tr>${cells.slice(i, i + 7).map((c) => `<td class="${c.inMonth ? '' : 'out'}"><span class="d">${c.n}</span>${c.inMonth ? people.map((p) => {
       const r = maps[p.id][c.iso]; if (!r) return `<div class="pr-line"></div>`;
       const t = shiftOf(p, r.kind); (used[t.short + '|' + t.label + '|' + shiftHours(t)] = 1);
-      return `<div class="pr-line pr-c${famColor(p)}"><i>${esc(firstName(p).slice(0, 1))}</i><b>${esc(t.short)}</b><small>${esc(shiftHours(t))}</small></div>`;
+      const rp = repDay(p, c.iso);
+      return `<div class="pr-line pr-c${famColor(p)}"><i>${esc(firstName(p).slice(0, 1))}</i><b>${esc(t.short)}</b><small>${esc(rp || shiftHours(t))}</small></div>`;
     }).join('') : ''}</td>`).join('')}<td class="rep">${people.map((p) => { const r = repartoOf(p, mon); return r ? `<div class="pr-c${famColor(p)}"><b>${esc(firstName(p).slice(0, 1))}</b> ${esc(r)}</div>` : ''; }).join('')}</td></tr>`);
   }
   const legend = Object.keys(used).map((k) => { const [a, b, h] = k.split('|'); return `<span class="pr-leg"><b>${esc(a)}</b> ${esc(b)}${h ? ' ' + esc(h) : ''}</span>`; }).join('');
@@ -2128,7 +2147,7 @@ async function onJoinHousehold(form) {
 }
 
 /* ---------- eventi ---------- */
-const WRITE_ACTIONS = new Set(['fam-day', 'fam-quick', 'quick-scan', 'fam-addperson', 'fam-reparti', 'fam-pick', 'fam-clear', 'fam-who', 'shift-day', 'shift-paint', 'shift-pick', 'shift-clear', 'shift-types', 'shift-cycle', 'new-shift-type', 'edit-shift-type', 'new-history', 'delete-history', 'new-deadline', 'new-item', 'new-log', 'edit-item', 'delete-item', 'hide-section', 'unhide-section', 'delete-deadline', 'delete-log', 'pay-form', 'reopen-form', 'inbox-add', 'inbox-paid', 'inbox-skip']);
+const WRITE_ACTIONS = new Set(['fam-day', 'fam-quick', 'quick-scan', 'week-scan', 'fam-rep-set', 'fam-addperson', 'fam-reparti', 'fam-pick', 'fam-clear', 'fam-who', 'shift-day', 'shift-paint', 'shift-pick', 'shift-clear', 'shift-types', 'shift-cycle', 'new-shift-type', 'edit-shift-type', 'new-history', 'delete-history', 'new-deadline', 'new-item', 'new-log', 'edit-item', 'delete-item', 'hide-section', 'unhide-section', 'delete-deadline', 'delete-log', 'pay-form', 'reopen-form', 'inbox-add', 'inbox-paid', 'inbox-skip']);
 document.addEventListener('click', async (e) => {
   const el = e.target.closest('[data-action]');
   if (!el) return;
@@ -2150,6 +2169,21 @@ document.addEventListener('click', async (e) => {
     case 'fam-clear': if (applyShift(el.dataset.item, el.dataset.day, null)) { render(); openFamilyDay(el.dataset.day); } break;
     case 'fam-quick': if (id) state.famWho = id; openQuick(); break;
     case 'fam-addperson': openSheet('Aggiungi una persona', `<form id="fam-person-form" autocomplete="off"><label>Nome<input name="n" required maxlength="30" placeholder="es. Papà" list="fp-s"></label><datalist id="fp-s"><option value="Mamma"><option value="Papà"></datalist><div class="actions"><button class="btn" type="submit">Aggiungi</button></div></form>`); break;
+    case 'fam-rep-set': {
+      const it = byId(state.items, el.dataset.item); const v = ($('#repd-' + el.dataset.item)?.value || '').trim(); if (!it) break;
+      const rd = { ...(it.details?.repartiDay || {}) }; if (v) rd[el.dataset.day] = v; else delete rd[el.dataset.day];
+      saveItem(it.id, { details: { ...(it.details || {}), repartiDay: rd } }).then((r) => { if (r) { render(); openFamilyDay(el.dataset.day); toast('Reparto salvato'); } });
+      break; }
+    case 'week-scan': {
+      const it = byId(state.items, state.famWho) || famPeople()[0]; if (!it || !window.Scan) break;
+      const ym = curYM(), t0 = todayISO(), base = t0.startsWith(ym) ? t0 : ym + '-01', monday = mondayOf(base);
+      window.Scan.open({ mode: 'week', who: firstName(it), tplKey: it.id, monday, known: allReparti(), onDone: async (days, mon) => {
+        const rd = { ...(it.details?.repartiDay || {}) };
+        for (let i = 0; i < 7; i++) { const [yy, mm, dd] = mon.split('-').map(Number); const t = new Date(yy, mm - 1, dd + i, 12); delete rd[toISO(t)]; }
+        Object.assign(rd, days);
+        const r = await saveItem(it.id, { details: { ...(it.details || {}), repartiDay: rd } });
+        if (r) { render(); toast(`${Object.keys(days).length} giorni con reparto salvati per ${firstName(it)}`); }
+      } }); break; }
     case 'quick-scan': {
       const [qy, qm] = curYM().split('-').map(Number); const dim = new Date(qy, qm, 0).getDate();
       if (!window.Scan) { toast('Lettore non disponibile, ricarica la pagina.'); break; }

@@ -207,16 +207,128 @@
   /* foto -> grigio */
   function toGray(rgba, w, h) { const g = new Uint8Array(w * h); for (let i = 0, j = 0; i < g.length; i++, j += 4) g[i] = rgba[j] * 0.299 + rgba[j + 1] * 0.587 + rgba[j + 2] * 0.114; return g; }
 
+
+  /* =================== foglio settimanale: in quale reparto lavora ogni giorno =================== */
+  // Si tocca una volta il cognome sul foglio; il programma cerca la stessa scritta (stesso carattere stampato)
+  // in tutte le altre caselle dei 7 giorni, confrontando le forme.
+  const WK_W = 2000;
+  function weekWarp(gray, sw, sh, c) {
+    const top = (dist(c[0], c[1]) + dist(c[3], c[2])) / 2, left = (dist(c[0], c[3]) + dist(c[1], c[2])) / 2;
+    const W = WK_W, H = Math.max(500, Math.min(1500, Math.round(W * left / top)));
+    const h = homography([[0, 0], [W, 0], [W, H], [0, H]], c), out = new Uint8Array(W * H);
+    for (let v = 0; v < H; v++) for (let u = 0; u < W; u++) {
+      const z = h[6] * u + h[7] * v + 1, x = (h[0] * u + h[1] * v + h[2]) / z, y = (h[3] * u + h[4] * v + h[5]) / z;
+      if (x < 0 || y < 0 || x >= sw - 1 || y >= sh - 1) { out[v * W + u] = 255; continue; }
+      const x0 = x | 0, y0 = y | 0, fx = x - x0, fy = y - y0, i = y0 * sw + x0;
+      out[v * W + u] = (gray[i] * (1 - fx) + gray[i + 1] * fx) * (1 - fy) + (gray[i + sw] * (1 - fx) + gray[i + sw + 1] * fx) * fy;
+    }
+    return { g: out, W, H };
+  }
+  function weekPrep(wg) {
+    const { g, W, H } = wg, ink = inkMask(g, W, H);
+    // le linee della foto sono un po' storte: allargo di 2 punti prima di cercare i segmenti lunghi
+    const dh = new Uint8Array(W * H), dv = new Uint8Array(W * H);
+    for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) if (ink[y * W + x]) { for (let d = -2; d <= 2; d++) { if (x + d >= 0 && x + d < W) dh[y * W + x + d] = 1; if (y + d >= 0 && y + d < H) dv[(y + d) * W + x] = 1; } }
+    const v = runs(dh, W, H, 40, true), hm = runs(dv, W, H, 60, false);
+    // testo = inchiostro senza le linee della tabella; poi dimezzo la risoluzione (densità 0..1)
+    const w2 = W >> 1, h2 = H >> 1, D = new Float32Array(w2 * h2);
+    const isLine = (x, y) => { for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) { const xx = x + dx, yy = y + dy; if (xx >= 0 && yy >= 0 && xx < W && yy < H && (v[yy * W + xx] || hm[yy * W + xx])) return true; } return false; };
+    for (let y = 0; y < h2; y++) for (let x = 0; x < w2; x++) {
+      let s = 0; for (let dy = 0; dy < 2; dy++) for (let dx = 0; dx < 2; dx++) { const xx = 2 * x + dx, yy = 2 * y + dy; if (ink[yy * W + xx] && !isLine(xx, yy)) s++; }
+      D[y * w2 + x] = s / 4;
+    }
+    for (let pass = 0; pass < 1; pass++) {   // piccola sfocatura: tollera mezzo punto di spostamento
+      const B = new Float32Array(D.length);
+      for (let y = 0; y < h2; y++) for (let x = 0; x < w2; x++) { let s = 0, c = 0; for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) { const xx = x + dx, yy = y + dy; if (xx >= 0 && yy >= 0 && xx < w2 && yy < h2) { s += D[yy * w2 + xx]; c++; } } B[y * w2 + x] = s / c; }
+      D.set(B);
+    }
+    // linee verticali (colonne dei giorni) e orizzontali (righe)
+    const yA = Math.round(H * 0.12), yB = Math.round(H * 0.45), pv = new Float64Array(W);
+    for (let y = yA; y < yB; y++) for (let x = 0; x < W; x++) pv[x] += v[y * W + x];
+    const xs = peaks(pv, (yB - yA) * 0.35, 6);
+    const ph = new Float64Array(H); for (let y = 0; y < H; y++) { let s = 0; for (let x = 0; x < W; x++) s += hm[y * W + x]; ph[y] = s; }
+    const ys = peaks(ph, W * 0.25, 3);
+    return { g, W, H, D, w2, h2, xs, ys };
+  }
+  function weekTemplate(P, tx, ty) {          // tx, ty in coordinate della foto raddrizzata (risoluzione piena)
+    const { D, w2, h2 } = P, cx = Math.round(tx / 2), cy = Math.round(ty / 2);
+    const colInk = (x, y0, y1) => { let s = 0; for (let y = y0; y <= y1; y++) s += D[y * w2 + x]; return s; };
+    const y0 = Math.max(0, cy - 8), y1 = Math.min(h2 - 1, cy + 8);
+    let sx = -1; for (let d = 0; d < 40 && sx < 0; d++) for (const x of [cx - d, cx + d]) if (x >= 0 && x < w2 && colInk(x, y0, y1) > 0.2) { sx = x; break; }
+    if (sx < 0) return null;
+    let xl = sx, xr = sx, gap = 0;
+    for (let x = sx; x >= 0 && gap <= 6; x--) { if (colInk(x, y0, y1) > 0.2) { xl = x; gap = 0; } else gap++; }
+    gap = 0; for (let x = sx; x < w2 && gap <= 6; x++) { if (colInk(x, y0, y1) > 0.2) { xr = x; gap = 0; } else gap++; }
+    const rowInk = (y) => { let s = 0; for (let x = xl; x <= xr; x++) s += D[y * w2 + x]; return s; };
+    let sy = -1; for (let d = 0; d < 12 && sy < 0; d++) for (const y of [cy - d, cy + d]) if (y >= 0 && y < h2 && rowInk(y) > 0.5) { sy = y; break; }
+    if (sy < 0) return null;
+    let yt = sy, yb = sy; gap = 0;
+    for (let y = sy; y >= 0 && gap <= 1 && sy - y < 16; y--) { if (rowInk(y) > 0.5) { yt = y; gap = 0; } else gap++; }
+    gap = 0; for (let y = sy; y < h2 && gap <= 1 && y - sy < 16; y++) { if (rowInk(y) > 0.5) { yb = y; gap = 0; } else gap++; }
+    const w = xr - xl + 1, h = yb - yt + 1; if (w < 12 || h < 4) return null;
+    const t = new Float32Array(w * h); for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) t[y * w + x] = D[(yt + y) * w2 + xl + x];
+    return { t, w, h, x0: xl, y0: yt, D, w2 };
+  }
+  const GW = 48, GH = 12;
+  function ncc(a, b) {
+    const n = a.length; let ma = 0, mb = 0; for (let i = 0; i < n; i++) { ma += a[i]; mb += b[i]; } ma /= n; mb /= n;
+    let sab = 0, saa = 0, sbb = 0; for (let i = 0; i < n; i++) { const x = a[i] - ma, y = b[i] - mb; sab += x * y; saa += x * x; sbb += y * y; }
+    return saa > 1e-9 && sbb > 1e-9 ? sab / Math.sqrt(saa * sbb) : 0;
+  }
+  function blobFeat(D, w2, x0, y0, w, h) {      // porta una scritta su una griglia fissa
+    const c = new Float64Array(w * h); for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) c[y * w + x] = D[(y0 + y) * w2 + x0 + x];
+    return areaResize(c, w, h, GW, GH);
+  }
+  // trova le «parole» (gruppi di lettere) nella zona dei giorni
+  function weekWords(P) {
+    const { D, w2, h2 } = P, xmin = Math.round((P.xs[0] || 0) / 2) + 3, seen = new Uint8Array(w2 * h2), words = [];
+    const on = (x, y) => D[y * w2 + x] > 0.2;
+    for (let y = 0; y < h2; y++) for (let x = xmin; x < w2; x++) {
+      if (seen[y * w2 + x] || !on(x, y)) continue;
+      // riempimento: unisco i punti entro 3 colonne e 1 riga (lettere della stessa parola)
+      const st = [[x, y]], pts = []; seen[y * w2 + x] = 1; let x0 = x, x1 = x, y0 = y, y1 = y;
+      while (st.length) {
+        const [px, py] = st.pop(); pts.push(1);
+        if (px < x0) x0 = px; if (px > x1) x1 = px; if (py < y0) y0 = py; if (py > y1) y1 = py;
+        for (let dy = -1; dy <= 1; dy++) for (let dx = -3; dx <= 3; dx++) { const nx = px + dx, ny = py + dy; if (nx >= xmin && ny >= 0 && nx < w2 && ny < h2 && !seen[ny * w2 + nx] && on(nx, ny)) { seen[ny * w2 + nx] = 1; st.push([nx, ny]); } }
+        if (pts.length > 20000) break;
+      }
+      const w = x1 - x0 + 1, h = y1 - y0 + 1;
+      if (w >= 14 && w <= 110 && h >= 5 && h <= 18) words.push({ x: x0, y: y0, w, h });
+    }
+    return words;
+  }
+  function weekMatch(P, T, thr) {              // T: scritta presa dalla foto (x0,y0,w,h) oppure ricordata ({tf, ar})
+    const tf = T.tf || blobFeat(P.D, P.w2, T.x0, T.y0, T.w, T.h), ar = T.ar || T.w / T.h, out = [];
+    for (const wd of weekWords(P)) {
+      const r = (wd.w / wd.h) / ar; if (r < 0.7 || r > 1.4) continue;
+      const v = ncc(tf, blobFeat(P.D, P.w2, wd.x, wd.y, wd.w, wd.h));
+      if (v >= thr) out.push({ v, xc: (wd.x + wd.w / 2) * 2, yc: (wd.y + wd.h / 2) * 2 });
+    }
+    return out.sort((a, b) => b.v - a.v);
+  }
+  function weekDay(P, xc) {                   // colonna del giorno (0 = lunedì …) dalla posizione orizzontale
+    const bs = P.xs.filter((x) => x >= 120); if (bs.length === 7) bs.push(P.W - 1);
+    const xs = bs.slice(-8); if (xs.length < 8) return -1;
+    for (let i = 0; i < 7; i++) if (xc >= xs[i] && xc < xs[i + 1]) return i;
+    return -1;
+  }
+  function weekDayEdges(P) { const bs = P.xs.filter((x) => x >= 120); if (bs.length === 7) bs.push(P.W - 1); return bs.slice(-8); }
+  // descrizione compatta di una scritta (per ricordarla alla settimana dopo)
+  function tplPack(T) { const tf = blobFeat(T.D, T.w2, T.x0, T.y0, T.w, T.h); return { ar: T.w / T.h, tf: Array.from(tf, (v) => Math.round(Math.min(1, Math.max(0, v)) * 255)) }; }
+  function tplUnpack(o) { return { ar: o.ar, tf: Float64Array.from(o.tf, (v) => v / 255) }; }
+
   /* =================== schermate =================== */
   const $ = (s, r = document) => r.querySelector(s);
   const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
   const CORNERS = ['in alto a sinistra', 'in alto a destra', 'in basso a destra', 'in basso a sinistra'];
+  const CORNER_HELP_W = ['la scritta «giorno», in alto a sinistra', 'la colonna «Domenica», in alto a destra', 'l\'ultima riga con i nomi, a destra', 'l\'ultima riga con i nomi, a sinistra'];
   const CORNER_HELP = ['la colonna «Matricola», sopra i nomi', 'la colonna «Totale ore», sopra', 'l\'ultima riga della tabella, a destra', 'l\'ultima riga della tabella, a sinistra'];
   let S = null;
 
   function open(opts) {
     close();
-    S = { opts, step: 'pick', img: null, coarse: [], fine: [], n: opts.n };
+    S = { opts, mode: opts.mode || 'month', step: 'pick', img: null, coarse: [], fine: [], n: opts.n };
     const root = document.createElement('div'); root.id = 'scan'; root.className = 'scan'; document.body.appendChild(root);
     document.body.style.overflow = 'hidden'; render();
   }
@@ -228,20 +340,31 @@
   function render() {
     const r = $('#scan'); if (!r || !S) return;
     if (S.step === 'pick') {
-      r.innerHTML = head('Leggi dalla foto', 'Scegli la foto del prospetto mensile. La foto resta sul telefono: non viene inviata a nessuno.') + `
+      r.innerHTML = head(S.mode === 'week' ? 'Reparti dalla foto settimanale' : 'Leggi dalla foto', S.mode === 'week' ? `Scegli la foto del «Quadro turni settimanali». Cerco i reparti di <b>${esc(S.opts.who)}</b>. La foto resta sul telefono.` : 'Scegli la foto del prospetto mensile. La foto resta sul telefono: non viene inviata a nessuno.') + `
         <div class="scan-body">
+          ${S.mode === 'week' ? `<label class="scan-lab">Settimana che inizia lunedì<input type="date" id="scan-monday" value="${esc(S.opts.monday)}"></label>` : ''}
           <label class="scan-btn big">Scegli o scatta la foto<input id="scan-file" type="file" accept="image/*" hidden></label>
-          <p class="scan-hint">Consigli: tutta la tabella dentro la foto, ben illuminata, senza riflessi. Poi toccherai i 4 angoli e la riga della persona.</p>
+          <p class="scan-hint">Consigli: tutta la tabella dentro la foto, ben illuminata, senza riflessi. Poi toccherai i 4 angoli ${S.mode === 'week' ? 'e un cognome' : 'e la riga della persona'}.</p>
           <p class="scan-hint" id="scan-msg"></p>
         </div>`;
     } else if (S.step === 'coarse') {
       const i = S.coarse.length;
-      r.innerHTML = head(`Angolo ${i + 1} di 4`, `Tocca l'angolo della tabella <b>${CORNERS[i]}</b>: ${CORNER_HELP[i]}.`) + `<div class="scan-body"><canvas id="scan-cv" class="scan-cv"></canvas>${i ? '<button class="scan-btn" data-sc="undo">Annulla l\'ultimo tocco</button>' : ''}</div>`;
+      r.innerHTML = head(`Angolo ${i + 1} di 4`, `Tocca l'angolo della tabella <b>${CORNERS[i]}</b>: ${(S.mode === 'week' ? CORNER_HELP_W : CORNER_HELP)[i]}.`) + `<div class="scan-body"><canvas id="scan-cv" class="scan-cv"></canvas>${i ? '<button class="scan-btn" data-sc="undo">Annulla l\'ultimo tocco</button>' : ''}</div>`;
       drawCoarse();
     } else if (S.step === 'fine') {
       const i = S.fine.length;
       r.innerHTML = head(`Angolo ${i + 1} di 4, più preciso`, `Ora tocca <b>esattamente</b> l'angolo ${CORNERS[i]}. La croce indica dove avevi toccato.`) + `<div class="scan-body"><canvas id="scan-cv" class="scan-cv"></canvas><button class="scan-btn" data-sc="skipfine">Va bene dov'è la croce</button></div>`;
       drawFine();
+    } else if (S.step === 'wtap') {
+      const saved = loadTpl();
+      r.innerHTML = head('Tocca un cognome', `Sul foglio tocca <b>una volta</b> il cognome di <b>${esc(S.opts.who)}</b>. Poi cerco lo stesso cognome in tutti i giorni.`) + `<div class="scan-body">
+        ${S.msg ? `<p class="scan-hint warn">${esc(S.msg)}</p>` : ''}
+        ${saved ? '<button class="scan-btn pri" data-sc="wsaved">Usa il cognome della volta scorsa</button>' : ''}
+        <div class="scan-names tall"><canvas id="scan-cv" class="scan-cv"></canvas></div>
+        <div class="scan-bar"><button class="scan-btn" data-sc="redo">Rifai gli angoli</button></div></div>`;
+      drawWeek();
+    } else if (S.step === 'wres') {
+      renderWeekResult(r);
     } else if (S.step === 'busy') {
       r.innerHTML = head('Elaboro…', '') + '<div class="scan-body"><p class="scan-hint">Raddrizzo la foto e cerco la tabella…</p></div>';
     } else if (S.step === 'row') {
@@ -275,12 +398,74 @@
     S.takeFine = take;
   }
 
+
+  /* ---- reparti settimanali: schermate ---- */
+  const DEF_REPARTI = ['Smistamento', 'Urgenze', 'Biologia mol.', 'Chimica', 'Coagulazione', 'Ematologia', 'Elettroforesi', 'Microbiologia', 'Sierologia'];
+  const lsGet = (k) => { try { return JSON.parse(localStorage.getItem(k) || 'null'); } catch (e) { return null; } };
+  const lsSet = (k, v) => { try { localStorage.setItem(k, JSON.stringify(v)); } catch (e) { /* niente memoria: pazienza */ } };
+  const loadTpl = () => lsGet('scadTpl_' + (S.opts.tplKey || ''));
+  const addDays = (iso, n) => { const [y, m, d] = iso.split('-').map(Number); const t = new Date(y, m - 1, d + n, 12); return t.getFullYear() + '-' + String(t.getMonth() + 1).padStart(2, '0') + '-' + String(t.getDate()).padStart(2, '0'); };
+  const mondayISO = (iso) => { const [y, m, d] = iso.split('-').map(Number); const t = new Date(y, m - 1, d, 12), k = (t.getDay() + 6) % 7; return addDays(iso, -k); };
+  const DAYN = ['Lunedì', 'Martedì', 'Mercoledì', 'Giovedì', 'Venerdì', 'Sabato', 'Domenica'];
+  function drawWeek() {
+    const cv = $('#scan-cv'), wg = S.wg; cv.width = wg.W; cv.height = wg.H;
+    const c = cv.getContext('2d'), id = c.createImageData(wg.W, wg.H);
+    for (let i = 0; i < wg.W * wg.H; i++) { const v = wg.g[i]; id.data[i * 4] = id.data[i * 4 + 1] = id.data[i * 4 + 2] = v; id.data[i * 4 + 3] = 255; }
+    c.putImageData(id, 0, 0);
+    cv.style.width = '170%';
+    cv.onclick = (e) => {
+      const b = cv.getBoundingClientRect(), tx = (e.clientX - b.left) * cv.width / b.width, ty = (e.clientY - b.top) * cv.height / b.height;
+      const T = weekTemplate(S.P, tx, ty);
+      if (!T) { S.msg = 'Lì non vedo nessuna scritta: tocca proprio sopra il cognome.'; render(); return; }
+      S.msg = ''; const pk = tplPack(T); lsSet('scadTpl_' + (S.opts.tplKey || ''), pk); runWeek(T);
+    };
+  }
+  function runWeek(T) {
+    S.step = 'busy'; render();
+    setTimeout(() => {
+      const P = S.P, found = weekMatch(P, T, 0.85).map((m) => ({ ...m, day: weekDay(P, m.xc) })).filter((m) => m.day >= 0);
+      found.sort((a, b) => a.day - b.day || a.yc - b.yc);
+      const mem = lsGet('scadRows') || [];
+      found.forEach((m) => { const f = m.yc / P.H; const near = mem.filter((x) => Math.abs(x.f - f) < 0.013).sort((a, b) => Math.abs(a.f - f) - Math.abs(b.f - f))[0]; m.name = near ? near.name : ''; m.known = !!near; });
+      S.found = found; S.step = 'wres'; render();
+    }, 40);
+  }
+  function cropCanvas(g, W, x, y, w, h, scale) {
+    const cv = document.createElement('canvas'); cv.width = Math.max(4, Math.round(w)); cv.height = Math.max(4, Math.round(h));
+    const c = cv.getContext('2d'), id = c.createImageData(cv.width, cv.height);
+    for (let yy = 0; yy < cv.height; yy++) for (let xx = 0; xx < cv.width; xx++) { const sx = Math.round(x) + xx, sy = Math.round(y) + yy, v = sx >= 0 && sy >= 0 && sx < W ? g[sy * W + sx] : 255, o = (yy * cv.width + xx) * 4; id.data[o] = id.data[o + 1] = id.data[o + 2] = v; id.data[o + 3] = 255; }
+    c.putImageData(id, 0, 0); cv.className = 'scan-wc'; return cv;
+  }
+  function renderWeekResult(r) {
+    const P = S.P, edges = weekDayEdges(P), lab = Math.round(edges[0]) + 6;
+    const known = [...new Set([...DEF_REPARTI, ...(S.opts.known || []), ...(lsGet('scadRows') || []).map((x) => x.name).filter(Boolean)])];
+    const monday = S.opts.monday;
+    const items = S.found.map((m, i) => `<div class="scan-wr" data-i="${i}"><div class="d">${DAYN[m.day]} ${addDays(monday, m.day).slice(8)}/${addDays(monday, m.day).slice(5, 7)}</div>
+        <div class="imgs" data-i="${i}"></div>
+        <input class="rep-in" data-i="${i}" list="scan-rep" maxlength="40" value="${esc(m.name)}" placeholder="reparto (vuoto = nessuno)"></div>`).join('');
+    r.innerHTML = head('Reparti trovati', S.found.length ? `Ho trovato <b>${esc(S.opts.who)}</b> in <b>${S.found.length}</b> punti. A sinistra vedi il nome della riga: scrivi il reparto. Se è una riga di turno (es. «14.00 - 22.00») lascia vuoto.` : 'Non ho trovato quel cognome in nessun giorno.') +
+      `<div class="scan-body"><datalist id="scan-rep">${known.map((k) => `<option value="${esc(k)}">`).join('')}</datalist>
+        ${items}${S.found.length ? '' : '<p class="scan-hint">Prova a toccare un altro punto dove c\'è il cognome, oppure rifai gli angoli.</p>'}
+        <div class="scan-bar"><button class="scan-btn" data-sc="wback">Cambia cognome</button><button class="scan-btn pri" data-sc="wuse">Salva i reparti</button></div></div>`;
+    r.querySelectorAll('.imgs').forEach((el) => {
+      const m = S.found[+el.dataset.i];
+      el.appendChild(cropCanvas(P.g, P.W, 0, m.yc - 26, lab, 52));
+      el.appendChild(cropCanvas(P.g, P.W, m.xc - 90, m.yc - 14, 180, 28));
+    });
+  }
+
   function analyze() {
     S.step = 'busy'; render();
     setTimeout(() => {
       try {
-        const wg = warpGray(S.img.gray, S.img.w, S.img.h, S.fine);
-        S.geo = geometry(wg, S.n); S.band = null; S.step = 'row';
+        if (S.mode === 'week') {
+          const wg = weekWarp(S.img.gray, S.img.w, S.img.h, S.fine); S.wg = wg; S.P = weekPrep(wg);
+          if (S.P.xs.filter((x) => x >= 120).length < 7) throw new Error('non trovo le colonne dei giorni: rifai gli angoli');
+          S.step = 'wtap';
+        } else {
+          const wg = warpGray(S.img.gray, S.img.w, S.img.h, S.fine);
+          S.geo = geometry(wg, S.n); S.band = null; S.step = 'row';
+        }
       } catch (e) { S.step = 'pick'; S.err = String(e.message || e); }
       render(); if (S && S.err) { const m = $('#scan-msg'); if (m) m.textContent = 'Non riesco a elaborare la foto: ' + S.err; }
     }, 40);
@@ -339,6 +524,7 @@
       const m = $('#scan-msg'); if (m) m.textContent = 'Carico la foto…';
       try { S.img = await loadFile(e.target.files[0]); S.coarse = []; S.step = 'coarse'; render(); } catch (err) { if (m) m.textContent = 'Non riesco ad aprire questa foto. Se è in formato HEIC prova a scattarla di nuovo con «Più compatibile» nelle impostazioni della fotocamera.'; }
     }
+    if (e.target.id === 'scan-monday') { const v = e.target.value; if (v) S.opts.monday = mondayISO(v); }
     if (e.target.matches('.scan-cell select')) { S.codes[+e.target.dataset.i] = e.target.value; e.target.closest('.scan-cell').classList.remove('doubt'); }
   });
   document.addEventListener('click', (e) => {
@@ -350,8 +536,17 @@
     else if (a === 'redo') { S.step = 'coarse'; S.coarse = []; S.fine = []; render(); }
     else if (a === 'read') readNow();
     else if (a === 'back') { S.step = 'row'; render(); }
+    else if (a === 'wsaved') { const o = loadTpl(); if (o) runWeek(tplUnpack(o)); }
+    else if (a === 'wback') { S.step = 'wtap'; render(); }
+    else if (a === 'wuse') {
+      const days = {}, mem = (lsGet('scadRows') || []).slice();
+      S.found.forEach((m, i) => { const el = document.querySelector('.rep-in[data-i="' + i + '"]'), name = (el ? el.value : m.name).trim(); const f = m.yc / S.P.H;
+        const k = mem.findIndex((x) => Math.abs(x.f - f) < 0.013); if (k >= 0) mem[k] = { f, name }; else mem.push({ f, name });
+        if (name) { const iso = addDays(S.opts.monday, m.day); days[iso] = days[iso] && !days[iso].split(' + ').includes(name) ? days[iso] + ' + ' + name : name; } });
+      lsSet('scadRows', mem.slice(-60)); const cb = S.opts.onDone, mon = S.opts.monday; close(); cb && cb(days, mon);
+    }
     else if (a === 'use') { const codes = S.codes.slice(); const cb = S.opts.onDone; close(); cb && cb(codes); }
   });
 
-  window.Scan = { open, close, _core: { warpGray, geometry, pickBand, readRow, toGray, features, classify, snapBand, DOUBT } };
+  window.Scan = { open, close, _core: { weekWarp, weekPrep, weekTemplate, weekMatch, weekDay, tplPack, tplUnpack, warpGray, geometry, pickBand, readRow, toGray, features, classify, snapBand, DOUBT } };
 })();

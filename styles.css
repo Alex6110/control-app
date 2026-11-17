@@ -603,3 +603,11 @@ a.chip { text-decoration: none; display: inline-flex; align-items: center; }
 .scan-cell.doubt{background:rgba(255,212,0,.28);border-color:#e0b400}
 .scan-cell .d{font-size:.75rem;opacity:.7}.scan-th{width:100%;height:auto;border-radius:4px;background:#fff}
 .scan-cell select{font-size:1.05rem;font-weight:600;padding:6px;border-radius:8px}
+.scan-lab{display:block;margin:0 0 12px;font-weight:600}.scan-lab input{display:block;margin-top:6px;font-size:1rem;padding:10px;border-radius:10px;border:1px solid rgba(128,128,128,.4);background:transparent;color:inherit;width:100%}
+.scan-names.tall{max-height:56vh}.scan-hint.warn{color:#c2410c;opacity:1;font-weight:600}
+.scan-wr{border:1px solid rgba(128,128,128,.3);border-radius:12px;padding:8px;margin:0 0 10px}.scan-wr .d{font-weight:700;margin-bottom:6px}
+.scan-wr .imgs{display:flex;gap:6px;align-items:center;flex-wrap:wrap}.scan-wc{border-radius:4px;background:#fff;max-width:100%;height:auto}
+.scan-wr .rep-in{width:100%;margin-top:8px;font-size:1.05rem;padding:10px;border-radius:10px;border:1px solid rgba(128,128,128,.4);background:transparent;color:inherit}
+.fam-rp{display:block;font-style:normal;font-size:8px;font-weight:600;line-height:1.1;opacity:.85;margin-top:1px;text-transform:uppercase;overflow:hidden;white-space:nowrap}
+.rep-day{display:flex;gap:8px;align-items:center;margin:4px 0 10px}.rep-day input{flex:1;min-width:0;font-size:1rem;padding:10px;border-radius:10px;border:1px solid var(--line,rgba(128,128,128,.4));background:var(--card,#fff);color:inherit}
+@media (min-width:900px) and (hover:hover){.fam-rp{font-size:11px}}

@@ -279,12 +279,15 @@ function testoDaPdf(blob) {
     // Richiede il servizio avanzato "Drive API" (v3): vedi la guida.
     var f = Drive.Files.create({ name: 'tmp-scadenziario', mimeType: 'application/vnd.google-apps.document' }, blob, { ocrLanguage: 'it' });
     id = f.id;
-    return DocumentApp.openById(id).getBody().getText();
+    // Il testo si scarica con l'API di Drive (niente servizio Documenti, che chiede un permesso in più)
+    var r = UrlFetchApp.fetch('https://www.googleapis.com/drive/v3/files/' + id + '/export?mimeType=text%2Fplain',
+      { headers: { Authorization: 'Bearer ' + ScriptApp.getOAuthToken() }, muteHttpExceptions: true });
+    return r.getResponseCode() === 200 ? r.getContentText() : '';
   } catch (e) {
     Logger.log('PDF non leggibile: ' + e);
     return '';
   } finally {
-    if (id) { try { DriveApp.getFileById(id).setTrashed(true); } catch (e2) {} }
+    if (id) { try { Drive.Files.remove(id); } catch (e2) { try { DriveApp.getFileById(id).setTrashed(true); } catch (e3) {} } }
   }
 }
 

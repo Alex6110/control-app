@@ -120,3 +120,8 @@ In **Turni → Compila dal foglio → «Leggi la riga dalla foto»**:
 5. «Usa queste sigle» e poi «Compila il calendario».
 Tutto avviene sul telefono: nessuna foto parte, nessun servizio esterno, gratis.
 Il lettore riconosce: 1, 1C, 1CR, 1B, 1D, 2, 2A, 2*, 3, S, R, A, F, P e il vuoto. Le sigle che nel tuo calendario non esistono vengono segnalate e saltate.
+
+## Novità v11
+- **Sigle sconosciute**: non vengono più scartate. Diventano nuovi tipi di turno chiamati «Sigla XX» (grigi) e finiscono nel calendario; chi le conosce le rinomina da «Tipi» (nome, colore, orario). Solo «?» e «-» restano vuoti.
+- **Reparto per ogni giorno**: tocca un giorno del calendario condiviso e scrivi il reparto (compare sotto la sigla, e nella stampa). Il reparto fisso della settimana resta, ed è usato dove non c'è quello del giorno.
+- **Reparti dalla foto del «Quadro turni settimanali»**: Turni insieme → «Leggi i reparti di … dalla foto settimanale». Scegli la foto, tocca i 4 angoli, tocca **una volta** il cognome sul foglio; l'app cerca lo stesso cognome in tutti i giorni e ti mostra, per ognuno, il nome della riga: scrivi il reparto (righe di turno come «14.00 - 22.00»: lascia vuoto). L'app ricorda i nomi delle righe e il cognome per la settimana dopo.
